@@ -1,0 +1,69 @@
+# Run via prek (fast Rust drop-in for pre-commit, installed by mise).
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        stages: [pre-commit]
+      - id: end-of-file-fixer
+        stages: [pre-commit]
+      - id: check-yaml
+        stages: [pre-commit]
+      - id: check-toml
+        stages: [pre-commit]
+      - id: check-merge-conflict
+        stages: [pre-commit]
+      - id: check-added-large-files
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      # language: system, entries prefixed with `mise exec --` so these call
+      # the mise-pinned binaries by version regardless of ambient shell PATH
+      # ordering — tool versions live only in mise.toml, never duplicated here.
+      - id: ruff-check
+        name: ruff check --fix
+        language: system
+        entry: mise exec -- uv run ruff check --fix
+        types: [python]
+
+      - id: ruff-format
+        name: ruff format
+        language: system
+        entry: mise exec -- uv run ruff format
+        types: [python]
+
+      - id: ty-check
+        # Pre-1.0 typechecker: kept as a real hook so commits surface issues
+        # early, but CI's `prek run --all-files` step SKIPs it (see ci.yml) in
+        # favor of its own continue-on-error ty step, so it never blocks a merge.
+        name: ty check (pre-1.0, advisory in CI)
+        language: system
+        entry: mise exec -- uv run ty check .
+        pass_filenames: false
+        types: [python]
+
+      - id: gitleaks
+        name: gitleaks (staged files)
+        language: system
+        entry: mise exec -- gitleaks git --staged --redact --verbose
+        pass_filenames: false
+
+      - id: no-persona-bundle
+        # The compiled bundle carries candid per-person commentary sourced from
+        # .kbignore'd vault paths. .gitignore already excludes it; this hook is
+        # the second lock, so a `git add -f` can't quietly land one.
+        name: refuse to commit a compiled persona bundle
+        language: system
+        entry: mise exec -- python3 scripts/no_persona_bundle.py
+        pass_filenames: true
+
+      - id: pytest
+        name: pytest
+        language: system
+        entry: mise exec -- uv run pytest
+        pass_filenames: false
+        stages: [pre-push]
+        always_run: true

@@ -1,0 +1,59 @@
+[project]
+name = "ask-maurice"
+version = "0.1.0"
+description = "Hosted doppelgänger agent: answers Soilytix team questions in Maurice's voice, from the shared vault only, framed for whoever asked."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=0.75",
+    "fastapi>=0.121",
+    "google-cloud-secret-manager>=2.24",
+    "pyjwt[crypto]>=2.10",
+    "pyyaml>=6.0",
+    "rich>=15.0.0",
+    "slack-sdk>=3.36",
+    "typer>=0.24.2",
+    "uvicorn[standard]>=0.40",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.15",
+    "ty>=0.0.1a1",
+]
+
+[project.scripts]
+ask-maurice = "ask_maurice.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ask_maurice"]
+
+[tool.uv]
+required-version = ">=0.11,<0.12" # enforce the uv major that made uv.lock
+# Dependency cooldown: never resolve a release younger than this. Supply-chain
+# safety margin (malicious releases usually get yanked within days). Sliding
+# window - reproducibility still comes from uv.lock + `uv sync --frozen`.
+exclude-newer = "2 weeks ago"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+# E/F: pyflakes+pycodestyle, I: import sort, UP: pyupgrade, B: bugbear,
+# S: bandit (security) so we don't need a separate SAST tool.
+select = ["E", "F", "I", "UP", "B", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# assert is the point of a test; S603/S607 are the fixture git calls that build
+# throwaway checkouts under tmp_path — fixed argv, no shell, no user input.
+"tests/**" = ["S101", "S603", "S607"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config"
+testpaths = ["tests"]

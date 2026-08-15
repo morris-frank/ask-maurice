@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans history
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Sync dependencies
+        run: mise exec -- uv sync --frozen
+
+      - name: Hooks (ty skipped — advisory, see next step)
+        env:
+          SKIP: ty-check
+        run: mise exec -- prek run --all-files --show-diff-on-failure
+
+      - name: Typecheck (advisory, ty is pre-1.0)
+        continue-on-error: true
+        run: mise run typecheck
+
+      - name: Tests
+        run: mise run test
+
+      - name: Secret scan
+        run: mise exec -- gitleaks dir . --redact --verbose
+
+      - name: Dependency audit
+        run: mise run audit

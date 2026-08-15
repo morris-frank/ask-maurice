@@ -1,0 +1,89 @@
+# mise is the single source of truth for the toolchain. Hooks and CI call
+# these same pinned binaries — versions are never duplicated elsewhere.
+min_version = "2026.7.18"
+
+[settings]
+lockfile = true # writes mise.lock — commit it for reproducible installs
+
+[tools]
+python = "3.13"
+uv = "0.11"
+ruff = "0.15"
+# ty is pre-1.0 (Astral's typechecker); track latest deliberately, and CI/hooks
+# treat its failures as non-blocking until it stabilizes.
+ty = "latest"
+gitleaks = "latest"
+osv-scanner = "latest"
+prek = "latest" # fast Rust drop-in for pre-commit, runs the hook config below
+
+[env]
+UV_PROJECT_ENVIRONMENT = ".venv" # keep the venv at repo root
+_.file = [".env", ".env.local"]  # auto-load secrets for every task/hook
+
+# Every external tool below is invoked via `mise exec --` rather than bare —
+# guards against a same-named binary earlier on PATH than mise's own shims.
+
+[tasks.setup]
+description = "Cold start: install toolchain, sync deps, install git hooks, verify"
+run = [
+  "mise install",
+  "mise exec -- uv sync --frozen",
+  "mise exec -- prek install",
+  "mise exec -- prek install --hook-type pre-push",
+  "mise run check",
+]
+
+[tasks.install]
+description = "Sync dependencies and (re)install git hooks, no verification"
+run = [
+  "mise exec -- uv sync --frozen",
+  "mise exec -- prek install",
+  "mise exec -- prek install --hook-type pre-push",
+]
+
+[tasks.lint]
+description = "Lint with ruff"
+run = "mise exec -- uv run ruff check ."
+
+[tasks.fmt]
+description = "Format with ruff"
+run = "mise exec -- uv run ruff format ."
+
+[tasks.typecheck]
+description = "Typecheck with ty (pre-1.0, advisory — see CI)"
+run = "mise exec -- uv run ty check ."
+
+[tasks.test]
+description = "Run the test suite"
+run = "mise exec -- uv run pytest"
+
+[tasks.check]
+description = "Everything CI runs: lint + format-check + typecheck + tests"
+run = [
+  "mise exec -- uv run ruff check .",
+  "mise exec -- uv run ruff format --check .",
+  "mise exec -- uv run ty check . || true", # advisory only, see typecheck task
+  "mise exec -- uv run pytest",
+]
+
+[tasks.hooks]
+description = "Run all prek hooks against the whole repo"
+run = "mise exec -- prek run --all-files"
+
+[tasks.audit]
+description = "Scan dependencies for known vulnerabilities against uv.lock"
+run = "mise exec -- osv-scanner scan --lockfile=uv.lock"
+
+[tasks.secrets]
+description = "Scan the working tree for secrets"
+run = "mise exec -- gitleaks dir . --redact --verbose"
+
+# --- the two planes ---------------------------------------------------------
+
+[tasks.build-persona]
+description = "BUILD PLANE (private machine only): compile the persona bundle from the private vault"
+run = "mise exec -- uv run ask-maurice build-persona"
+
+[tasks.serve]
+description = "RUNTIME PLANE: serve the agent locally against a local bundle + team-vault clone"
+run = "mise exec -- uv run ask-maurice serve"
