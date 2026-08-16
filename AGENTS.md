@@ -124,6 +124,9 @@ tests/                pure logic only, plus test_boundary.py — which fails if 
                       under runtime/ imports the build plane or names the private vault
 Dockerfile            Cloud Run image: uv sync --frozen --no-dev, non-root, port 8080,
                       COPY dist/corpus (never corpus/), and no persona bundle at all
+RUNBOOK.md            the operator sequence, first deploy to first answer. Keep it in
+                      step with the CLI and the Dockerfile — a stale runbook is how a
+                      boot guard gets read as an outage
 ```
 
 ## Divergences from `doppel-maurice` worth knowing

@@ -98,6 +98,10 @@ connected".
 
 ## Local development
 
+For the full first-deploy sequence — secret, bundle, image, Slack app, Cloud Run,
+in the order an operator has to type them — see **[`RUNBOOK.md`](RUNBOOK.md)**.
+What follows is just the local loop.
+
 ```bash
 mise run setup          # toolchain, deps, hooks, then `check`
 ask-maurice build-persona
