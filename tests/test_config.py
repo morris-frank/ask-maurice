@@ -1,16 +1,10 @@
-"""The production access-edge guard, and the two ways to satisfy it."""
+"""The production access-edge guard, and the one way to satisfy it."""
 
 from __future__ import annotations
 
 import pytest
 
 from ask_maurice.config import ConfigError, RuntimeConfig
-
-ENTRA_VARS = {
-    "ASK_MAURICE_ENTRA_TENANT_ID": "11111111-2222-3333-4444-555555555555",
-    "ASK_MAURICE_ENTRA_AUDIENCE": "api://ask-maurice",
-    "ASK_MAURICE_RESOURCE_URL": "https://ask-maurice.example.com",
-}
 
 # Low-entropy and unprefixed on purpose: a realistic `xoxb-…` here trips the
 # secret scanner, and the values are never parsed, only carried.
@@ -19,9 +13,18 @@ SLACK_VARS = {
     "SLACK_BOT_TOKEN": "test-slack-bot-token",
 }
 
+# The variables of the two removed edges. Cleared like the rest, because the
+# point of several tests below is that setting them changes nothing.
+RETIRED_VARS = [
+    "ASK_MAURICE_ENTRA_TENANT_ID",
+    "ASK_MAURICE_ENTRA_AUDIENCE",
+    "ASK_MAURICE_RESOURCE_URL",
+    "ASK_MAURICE_IAP_AUDIENCE",
+]
+
 ALL_VARS = [
-    *ENTRA_VARS,
     *SLACK_VARS,
+    *RETIRED_VARS,
     "ASK_MAURICE_ENV",
     "ASK_MAURICE_BUNDLE_SOURCE",
     # `RuntimeConfig.from_env` also builds the mixedbread config, which raises on a
@@ -42,31 +45,13 @@ def clean_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ASK_MAURICE_ENV", "production")
 
 
-def test_production_accepts_slack_alone(monkeypatch: pytest.MonkeyPatch):
-    """The v1 surface: Slack in front, no bearer-token edge at all."""
+def test_production_accepts_slack(monkeypatch: pytest.MonkeyPatch):
+    """The v1 surface, and currently the only one."""
     for name, value in SLACK_VARS.items():
         monkeypatch.setenv(name, value)
     config = RuntimeConfig.from_env()
-    assert config.entra is None
     assert config.slack is not None
     assert config.has_access_edge
-
-
-def test_production_accepts_entra_alone(monkeypatch: pytest.MonkeyPatch):
-    for name, value in ENTRA_VARS.items():
-        monkeypatch.setenv(name, value)
-    config = RuntimeConfig.from_env()
-    assert config.slack is None
-    assert config.entra is not None
-    assert config.has_access_edge
-
-
-def test_production_accepts_both_edges(monkeypatch: pytest.MonkeyPatch):
-    for name, value in {**ENTRA_VARS, **SLACK_VARS}.items():
-        monkeypatch.setenv(name, value)
-    config = RuntimeConfig.from_env()
-    assert config.entra is not None
-    assert config.slack is not None
 
 
 def test_a_signing_secret_without_a_bot_token_is_no_edge(monkeypatch: pytest.MonkeyPatch):
@@ -85,28 +70,41 @@ def test_a_bot_token_without_a_signing_secret_is_no_edge(monkeypatch: pytest.Mon
         RuntimeConfig.from_env()
 
 
-def test_production_refuses_with_no_edge_and_names_both(monkeypatch: pytest.MonkeyPatch):
+def test_production_refuses_with_no_edge_and_says_what_to_set(monkeypatch: pytest.MonkeyPatch):
     with pytest.raises(ConfigError) as caught:
         RuntimeConfig.from_env()
     message = str(caught.value)
     assert "ASK_MAURICE_SLACK_SIGNING_SECRET" in message
-    assert "ASK_MAURICE_ENTRA_TENANT_ID" in message
+    assert "SLACK_BOT_TOKEN" in message
 
 
-def test_the_guard_no_longer_offers_iap(monkeypatch: pytest.MonkeyPatch):
-    """IAP is gone. A stale `ASK_MAURICE_IAP_AUDIENCE` must not read as an edge.
+def test_the_retired_edge_variables_are_read_by_nothing(monkeypatch: pytest.MonkeyPatch):
+    """Entra and IAP are gone. A deploy still carrying their variables must get
+    the boot refusal, not a service that looks configured and answers nobody.
 
-    The variable being ignored is the point: an operator who carried it over from
-    the previous deploy gets the boot refusal, not a service that looks configured
-    and answers everyone anonymously.
+    Silence is the dangerous outcome here: `ASK_MAURICE_ENTRA_*` set and honoured
+    by nothing would read, from the console, exactly like a working auth edge.
     """
+    monkeypatch.setenv("ASK_MAURICE_ENTRA_TENANT_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("ASK_MAURICE_ENTRA_AUDIENCE", "api://ask-maurice")
+    monkeypatch.setenv("ASK_MAURICE_RESOURCE_URL", "https://ask-maurice.example.com")
     monkeypatch.setenv(
         "ASK_MAURICE_IAP_AUDIENCE",
         "/projects/123456789012/locations/europe-west3/services/ask-maurice",
     )
     with pytest.raises(ConfigError) as caught:
         RuntimeConfig.from_env()
-    assert "IAP" not in str(caught.value)
+    message = str(caught.value)
+    assert "Entra" not in message
+    assert "IAP" not in message
+
+
+def test_the_config_has_no_bearer_edge_fields():
+    """`RuntimeConfig.entra` and `.iap` are gone rather than left set to None, so
+    a caller that still reads them fails loudly instead of seeing 'unconfigured'."""
+    fields = RuntimeConfig.__dataclass_fields__
+    assert "entra" not in fields
+    assert "iap" not in fields
 
 
 def test_development_still_runs_with_no_edge_at_all(monkeypatch: pytest.MonkeyPatch):
@@ -114,11 +112,3 @@ def test_development_still_runs_with_no_edge_at_all(monkeypatch: pytest.MonkeyPa
     config = RuntimeConfig.from_env()
     assert not config.has_access_edge
     assert not config.production
-
-
-def test_a_partial_entra_config_is_no_edge(monkeypatch: pytest.MonkeyPatch):
-    """Two of three variables is a misconfiguration, not half an access edge."""
-    monkeypatch.setenv("ASK_MAURICE_ENTRA_TENANT_ID", ENTRA_VARS["ASK_MAURICE_ENTRA_TENANT_ID"])
-    monkeypatch.setenv("ASK_MAURICE_ENTRA_AUDIENCE", ENTRA_VARS["ASK_MAURICE_ENTRA_AUDIENCE"])
-    with pytest.raises(ConfigError):
-        RuntimeConfig.from_env()

@@ -90,8 +90,8 @@ ENV ASK_MAURICE_CORPUS=/app/corpus \
     ASK_MAURICE_ENV=production
 # ASK_MAURICE_BUNDLE_SECRET and the access-edge variables come from the
 # deployment — the image has no idea which project or service it is running as.
-# With ASK_MAURICE_ENV=production set here, a deploy that configures neither
-# Slack nor Entra fails at boot rather than serving unframed answers to everyone.
+# With ASK_MAURICE_ENV=production set here, a deploy that does not configure the
+# Slack edge fails at boot rather than serving unframed answers to everyone.
 
 USER app
 

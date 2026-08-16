@@ -9,7 +9,6 @@ dependencies = [
     "fastapi>=0.121",
     "google-cloud-secret-manager>=2.24",
     "mixedbread>=0.54.0",
-    "pyjwt[crypto]>=2.10",
     "pyyaml>=6.0",
     "rich>=15.0.0",
     "slack-sdk>=3.36",

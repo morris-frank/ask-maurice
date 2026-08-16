@@ -1,13 +1,15 @@
 """The Slack access edge: request signing, and the slash-command payload.
 
-A different shape of trust from the Entra edge, and worth being explicit about
-rather than letting "auth" paper over it.
+This is now the only edge, which raises the stakes on being explicit about its
+trust model rather than letting "auth" paper over it.
 
-Entra hands us a per-request assertion, signed by an identity provider, that
-names the human who signed in. Slack hands us one shared secret proving *Slack*
-sent the request, and a `user_id` inside the body that we take on Slack's word.
-Transport authentication and caller identity come apart here: the signature says
-the request is genuine, the payload says who asked.
+The usual shape — Entra, IAP, any OIDC provider — is a per-request assertion,
+signed by an identity provider, naming the human who signed in. Slack instead
+hands us one shared secret proving *Slack* sent the request, and a `user_id`
+inside the body that we take on Slack's word. Transport authentication and caller
+identity come apart here: the signature says the request is genuine, the payload
+says who asked. Nothing else on this service authenticates anybody, so this is
+the whole of what "the caller is known" means.
 
 That matters more than it would for an ordinary bot, because per-caller framing
 draws on candid per-person commentary. A mis-attributed caller means an answer
@@ -15,7 +17,7 @@ shaped by material written about someone else. Two things bound it: Slack sets
 `user_id` server-side (a workspace member cannot forge another's), and an
 unresolved caller falls back to no framing rather than to a guess.
 
-What genuinely widens is *authorisation*. With a bearer token, access is a named
+What genuinely widens is *authorisation*. A bearer edge would gate on a named
 principal in a tenant. Here it is whoever can invoke the slash command —
 workspace and channel membership, administered in Slack rather than in the
 stack. The content exposure is bounded (retrieval reads only the shared vault,

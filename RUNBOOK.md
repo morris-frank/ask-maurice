@@ -16,24 +16,29 @@ Two things shape the sequence and neither is negotiable:
 ## The shape this deploys
 
 Slack in front, `--allow-unauthenticated` at the Cloud Run layer, and the app
-enforcing its own edges behind that:
+enforcing the edge behind that:
 
 | route | who gets through | how |
 |---|---|---|
 | `/slack/command` | the team | HMAC-SHA256 signature, five-minute replay window |
-| `/ask` | an MCP client or script with an Entra bearer token — nobody on a Slack-only deploy | RS256 against the tenant JWKS |
+| `/ask` | nobody | 401 — it answers only when no edge is configured at all, i.e. a local `serve` |
 | `/healthz` | anyone | it returns a status and the persona commit, nothing else |
 
 `--allow-unauthenticated` is not a gap here: Slack has to reach the service from
-the public internet, and `/ask` 401s anyone without a valid bearer token because
-an access edge *is* configured. Set `ASK_MAURICE_ENTRA_*` as well if you want the
-`/ask` half; leave it unset and the slash command is the whole surface.
+the public internet, and the slash command's signature is the real gate. Nothing
+else on the service answers a stranger.
 
-There is deliberately **no Google IAP option**. IAP fronts the entire Cloud Run
-service, so turning it on takes `/slack/command` down with it — Slack cannot sign
-in to it. The edge was removed from the codebase rather than left switched off;
-see README § Why there is no Google IAP edge. The consequence to be honest about:
-there is no browser-shaped way into `/ask`.
+**The slash command is the only way in.** The Entra bearer and Google IAP edges
+both existed and both were removed — IAP because it fronts the whole service and
+would intercept `/slack/command`, Entra because nothing on this surface used it.
+See README § Why there is only one edge. Two consequences for you as operator:
+
+- There is no browser or script access to `/ask`. Do not plan a scheduled job or
+  an MCP client against this deployment until an edge exists for it.
+- There is nothing to configure here. No audiences, no tenant ids, no JWKS. If a
+  previous deploy set `ASK_MAURICE_ENTRA_*` or `ASK_MAURICE_IAP_AUDIENCE`, delete
+  them — they are read by nothing, and leaving them makes the console look like
+  auth is configured when it is not.
 
 Steps 6–8 belong in the terraform repo long-term (alongside `stacks/dev/kb-mcp`,
 per `docs/runbooks/host-internal-app.md`). What follows is the manual equivalent
@@ -130,8 +135,8 @@ mise exec -- uv run ask-maurice publish-persona         # -> Secret Manager, ask
 ```
 
 `build-persona` warns about any participant it could not join to an email. Those
-people get *no framing* over Slack or Entra — fix their person file's aliases and
-rebuild rather than shipping the gap.
+people get *no framing* when they use the slash command — fix their person file's
+aliases and rebuild rather than shipping the gap.
 
 The file it writes is a sensitive asset: gitignored, mode 0600, a pre-commit hook
 refuses it, and the Dockerfile has a `RUN` check asserting it never reaches a
@@ -167,8 +172,9 @@ a model problem for as long as it takes someone to check.
 
 ## 5. Create the Slack app (Slack admin, before the deploy)
 
-Both Slack values must exist before the deploy, because a signing secret without
-a bot token is not an access edge and the config rejects it. In
+Both Slack values must exist before the deploy. A signing secret without a bot
+token is not an access edge and the config rejects it, and with no other edge
+left there is nothing for the service to fall back to — it will not boot. In
 api.slack.com/apps → **Create New App** → *From scratch*:
 
 1. **Basic Information → Signing Secret** → this is `ASK_MAURICE_SLACK_SIGNING_SECRET`.
@@ -296,10 +302,11 @@ failure this section exists to prevent.
 - **`ASK_MAURICE_INCLUDE_TRANSCRIPTS`.** 66 transcript files predate
   `transcripts/` entering `.kbignore`. They are shared, but they are pre-rule
   residue rather than a deliberate include.
-- **A browser surface for `/ask`.** With IAP gone, `/ask` is bearer-only. Giving
-  a person with a browser a way in means either a load balancer with a URL map
-  routing `/slack/command` to an IAP-free backend, or an interactive Entra login
-  flow. Both are real work; neither is started.
+- **Any authenticated HTTP surface at all.** `/ask` authenticates nobody now that
+  both bearer edges are gone. Bringing one back is a deliberate piece of work —
+  an Entra verifier again (config, JWKS, the RFC 9728 route, PyJWT), or a load
+  balancer with a URL map routing `/slack/command` to an IAP-free backend. Decide
+  it when something actually needs to ask over HTTP, not before.
 
 ## Keeping it running
 

@@ -1,10 +1,14 @@
 """Who is asking.
 
-Two inbound channels, one join key. Entra hands us verified JWT claims carrying
-an email; Slack hands us a user ID that `users.info` turns into an email. Both
-end up in `PersonaBundle.aliases`, which was built from person-file frontmatter
-at compile time — so this module resolves identity with a dict lookup and never
-opens a vault file.
+One inbound channel, one join key. Slack hands us a user ID that `users.info`
+turns into an email, which lands in `PersonaBundle.aliases` — built from
+person-file frontmatter at compile time, so this module resolves identity with a
+dict lookup and never opens a vault file. `from_handle` is the same lookup from
+the other direction, for `ask --as`.
+
+The email is the join key rather than any provider's own identifier, which is
+what kept this module unchanged when the Entra and IAP edges were removed: an
+edge decides how an address is proven, not what it means.
 
 An unresolved caller is not an error. They get a neutral answer with no framing
 at all, which is the correct failure direction: no framing is a worse answer, a
@@ -14,13 +18,8 @@ wrong framing is a wrong answer about a colleague.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from ask_maurice.persona import Participant, PersonaBundle
-
-# Entra puts the address in different claims depending on the app registration
-# and account type; check all three in preference order.
-_EMAIL_CLAIMS = ("preferred_username", "email", "upn")
 
 
 @dataclass(frozen=True)
@@ -38,22 +37,6 @@ class Caller:
         return self.participant is not None
 
 
-def email_from_claims(claims: dict[str, Any]) -> str | None:
-    for claim in _EMAIL_CLAIMS:
-        value = claims.get(claim)
-        if isinstance(value, str) and "@" in value:
-            return value.strip().lower()
-    return None
-
-
-def from_claims(claims: dict[str, Any], bundle: PersonaBundle) -> Caller:
-    email = email_from_claims(claims)
-    if email is None:
-        subject = str(claims.get("oid") or claims.get("sub") or "unknown")
-        return Caller(handle=subject)
-    return Caller(handle=email, participant=bundle.resolve(email))
-
-
 def from_handle(handle: str, bundle: PersonaBundle) -> Caller:
     """Resolve an email, alias or name — what `ask --as` and Slack both end at."""
     return Caller(handle=handle.strip(), participant=bundle.resolve(handle))
@@ -62,8 +45,8 @@ def from_handle(handle: str, bundle: PersonaBundle) -> Caller:
 def from_slack_user(user_id: str, token: str, bundle: PersonaBundle) -> Caller:
     """Slack user ID -> caller, via `users.info` and then the same alias table.
 
-    The one edge that needs a network round-trip to learn who is asking: Entra
-    carries the address inside the assertion, Slack carries only an opaque ID.
+    An edge that needs a network round-trip to learn who is asking, because Slack
+    carries only an opaque ID where a signed assertion would carry the address.
     When the lookup fails — token scope, a deactivated account, Slack having a
     bad minute — the caller keeps the raw ID as a handle and gets no framing.
     That is the same failure direction as an unrecognised email: a worse answer,

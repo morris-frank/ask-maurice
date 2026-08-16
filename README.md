@@ -1,8 +1,8 @@
 # ask-maurice
 
-A hosted doppelgänger agent. Someone on the Soilytix team asks a question — in
-Slack, or over MCP/HTTP — and gets an answer in Maurice's voice, grounded in the
-**shared** Soilytix vault, framed for whoever asked.
+A hosted doppelgänger agent. Someone on the Soilytix team asks a question in
+Slack and gets an answer in Maurice's voice, grounded in the **shared** Soilytix
+vault, framed for whoever asked.
 
 Three things make it more than a wrapper around a chat model:
 
@@ -10,9 +10,9 @@ Three things make it more than a wrapper around a chat model:
    own person file, style notes and the communication-advisor dict into one
    frozen bundle. Callers cannot change it.
 2. **The asker is known, so the answer is framed.** Slack tells us the user ID,
-   Entra tells us the email. Both resolve to a person file in the vault, which
-   carries that person's role, what they care about, and how Maurice's default
-   register should shift for them.
+   which `users.info` turns into an email, which resolves to a person file in the
+   vault — carrying that person's role, what they care about, and how Maurice's
+   default register should shift for them.
 3. **Artifacts are proposed, not only produced on request.** An explainer
    question that feeds off the technical docs is a candidate for a written
    document, a NotebookLM podcast, or an explainer video. The agent decides
@@ -34,7 +34,7 @@ BUILD PLANE (Maurice's machine only, never hosted)
     persona bundle (JSON)  ── ask-maurice publish-persona ──▶  GCP Secret Manager
                                                                        │
 ────────────────────────────────────────────────────────────────────── │ ────────
-RUNTIME PLANE (Cloud Run; Slack signature or Entra bearer at the edge) │
+RUNTIME PLANE (Cloud Run; Slack signature at the edge)                 │
                                                                        ▼
     baked corpus (team: Soilytix/vault @ main)                persona bundle
     564 markdown files + COMMIT, baked into the image         loaded at boot,
@@ -94,7 +94,7 @@ connected".
 | `ask-maurice vault-index` | runtime | push that checkout into the mixedbread vault store (opt-in; asks first) |
 | `ask-maurice bake-corpus` | image build | copy the retrievable subset of `corpus/` into `dist/corpus` for the image |
 | `ask-maurice ask "…" --as julia@soilytix.com` | runtime | one question from the terminal, framed for that person |
-| `ask-maurice serve` | runtime | HTTP service (Slack slash command, Entra-verified `/ask`) |
+| `ask-maurice serve` | runtime | HTTP service: the Slack slash command, plus `/ask` for local use |
 
 ## Local development
 
@@ -116,59 +116,66 @@ ask-maurice vault-index              # send it, after confirming
 Everything else runs off `corpus/` and a bundle — locally from `persona/bundle.json`,
 in production from Secret Manager.
 
-## Who the caller is: two access edges
+## Who the caller is: one access edge
 
-`serve` accepts identity from either edge, and both can be on at once. Which one
-a request used never changes the answer — both end at the same `Caller`, resolved
-through the alias table baked into the persona bundle.
+| route | who gets through | proves | identity from |
+|---|---|---|---|
+| `/slack/command` | the team | Slack sent it (HMAC-SHA256, 5-min window) | `user_id` in the payload → `users.info` |
+| `/ask` | nobody on a deployed service; anyone on a local `serve` | nothing — there is no verifier | `--as`, or anonymous |
+| `/healthz` | anyone | nothing | n/a |
 
-| edge | route | proves | identity from | typical caller |
-|---|---|---|---|---|
-| **Slack signed request** | `/slack/command` | Slack sent it (HMAC-SHA256, 5-min window) | `user_id` in the payload → `users.info` | the team |
-| **Entra bearer** | `/ask` | the human signed in (RS256, tenant JWKS) | `preferred_username`/`email`/`upn` | MCP client, script |
+`RuntimeConfig.from_env` refuses to boot in production without the Slack edge
+configured. That guard matters more here than in a typical service — an
+unidentified caller still gets an answer, but an unframed one, and the framing is
+the product.
 
-Nothing is shared between the two verifiers — different algorithms, different
-keys, different issuers, different claims — so they are separate functions rather
-than one parameterised one.
+`/ask` has no edge of its own and answers only when *nothing* on the deployment
+can identify anybody, which in practice means a local `serve`. As soon as Slack
+is configured it 401s. That is deliberate rather than an oversight: a route
+handing unframed answers to whoever finds the URL is not a smaller version of
+this product, it is a different one.
 
-On `/ask` the order is **verified bearer → anonymous**, and anonymous is
-development only: with any edge configured a request without a valid bearer token
-gets a 401, and `RuntimeConfig.from_env` refuses to boot in production unless at
-least one edge is configured. That guard matters more here than in a typical
-service — an unidentified caller still gets an answer, but an unframed one, and
-the framing is the product. Note the consequence on a Slack-only deploy: `/ask`
-401s everyone, because the team's surface is the slash command and a silently
-anonymous `/ask` would be the more surprising outcome.
+### Why there is only one edge
 
-### Why there is no Google IAP edge
+Two others existed and both were removed rather than left switched off.
 
-There was one, briefly, and it was removed rather than left switched off. IAP
-fronts the **whole** Cloud Run service, so it also intercepts `/slack/command` —
-and Slack cannot sign in to it. The two edges were exclusive in practice, and
-Slack is the surface the team actually uses. Running both would mean a load
-balancer with a URL map routing `/slack/command` to an IAP-free backend; if that
-day comes, the verifier is in the git history (`verify_iap`, ES256 against
-Google's static JWK set) and worth restoring rather than rewriting.
+**Google IAP** fronts the *whole* Cloud Run service, so it also intercepts
+`/slack/command` — and Slack cannot sign in to it. The two were exclusive in
+practice, and Slack is the surface the team actually uses. Running both would
+mean a load balancer with a URL map routing `/slack/command` to an IAP-free
+backend.
 
-The cost of the removal is real and worth naming: `/ask` is now bearer-only, so
-there is no browser-shaped way in. An MCP client or a script can authenticate;
-a person with a browser cannot.
+**Entra bearer tokens** worked and conflicted with nothing. They were removed for
+a duller reason: nothing on the first surface used them. `/ask` served an MCP
+client that is not wired and scripts nobody had written, at the cost of a config
+class, a verifier, a JWKS round trip, an RFC 9728 discovery route and the PyJWT
+dependency. That is a lot of standing surface for a caller who does not exist
+yet, so it went, and comes back when there is something to authenticate.
+
+Both verifiers are in the git history rather than deleted knowledge — `verify_iap`
+(ES256 against Google's static JWK set) and `verify` (RS256 against the tenant
+JWKS, with the `tid` check) — and are worth restoring rather than rewriting.
+
+What this costs, plainly: **there is no authenticated HTTP way in at all.** Slack
+is the product's only door. Anything that wants to ask over HTTP — an MCP server,
+a scheduled job, a script — needs an edge built for it first.
 
 ### Slack is a different shape of trust, deliberately
 
-Worth stating plainly rather than letting the word "auth" cover both cases. Entra
-hands us a per-request assertion, signed by an identity provider, naming the
-human who signed in. Slack hands us one shared secret proving *Slack* sent the
-request, plus a `user_id` in the body that we take on Slack's word. Transport
-authentication and caller identity come apart.
+Worth stating plainly rather than letting the word "auth" cover it. A signed
+assertion from an identity provider names the human who signed in. Slack instead
+hands us one shared secret proving *Slack* sent the request, plus a `user_id` in
+the body that we take on Slack's word. Transport authentication and caller
+identity come apart — and with Entra gone, this is the only trust model left, so
+it is worth understanding rather than skimming.
 
 Two things bound the identity risk: Slack sets `user_id` server-side, so a
 workspace member cannot forge another's, and an unresolved caller falls back to
-no framing rather than to a guess. What genuinely changes is **authorisation** —
-a bearer token is a named principal in a tenant; Slack is workspace and channel
-membership, administered in Slack rather than in the stack. Content exposure
-stays bounded either way, since retrieval reads only the shared vault that any
-Soilytix employee can already clone.
+no framing rather than to a guess. **Authorisation** is workspace and channel
+membership, administered in Slack rather than in the stack — so who can ask is a
+Slack admin decision, not an IAM one. Content exposure stays bounded either way,
+since retrieval reads only the shared vault that any Soilytix employee can
+already clone.
 
 Slack is also the only route that answers asynchronously. Slack wants HTTP 200
 within three seconds and an `opus-5` answer at `xhigh` effort is nowhere near
