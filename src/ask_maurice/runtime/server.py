@@ -1,4 +1,4 @@
-"""HTTP surface. Two access edges; either one is how we know who asked.
+"""HTTP surface. Three access edges; any of them is how we know who asked.
 
 **Entra bearer token.** Same verification shape as `kb-ingest`: RS256, JWKS from
 the tenant's discovery endpoint, issuer and audience both pinned, `tid` checked
@@ -11,6 +11,14 @@ about that verification is shared with the Entra path — different algorithm
 (ES256, not RS256), different keys (Google's static JWK set, not a tenant's
 JWKS), different issuer, different email claim. Hence a separate verifier rather
 than a parameterised one; the two only meet at `Caller`.
+
+**Slack signed request.** The team-facing surface, and the odd one out: it does
+not use `resolve_caller` at all. The signature authenticates *Slack*, not a
+person, and the human's identity arrives in the payload — so it gets its own
+route with its own verifier and its own identity join. See `runtime/slack.py`
+for what that trades away. It is also the only route that answers
+asynchronously, because Slack's three-second deadline and a considered answer
+are not compatible.
 
 Auth is required whenever `ASK_MAURICE_ENV=production` — `RuntimeConfig` refuses
 to construct without at least one edge, so an unauthenticated production deploy
@@ -29,16 +37,24 @@ import logging
 from typing import Any
 
 import jwt
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
+from slack_sdk.webhook import WebhookClient
 
 from ask_maurice.config import EntraConfig, IapConfig, RuntimeConfig
 from ask_maurice.persona import PersonaBundle
 from ask_maurice.runtime import bundle as bundle_mod
 from ask_maurice.runtime import redaction
-from ask_maurice.runtime.agent import Agent, AgentError
-from ask_maurice.runtime.corpus import Corpus
-from ask_maurice.runtime.identity import Caller, from_claims, from_handle, from_iap_claims
+from ask_maurice.runtime import slack as slack_mod
+from ask_maurice.runtime.agent import Agent, AgentError, Answer
+from ask_maurice.runtime.corpus import Corpus, CorpusError
+from ask_maurice.runtime.identity import (
+    Caller,
+    from_claims,
+    from_handle,
+    from_iap_claims,
+    from_slack_user,
+)
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +147,17 @@ def resolve_caller(
     raise HTTPException(401, "bearer token or IAP assertion required")
 
 
+def slack_answer_text(answer: Answer) -> str:
+    """Format an answer for Slack. Sources inline; the artifact hint if there is one."""
+    parts = [answer.text]
+    if answer.sources:
+        parts.append("_sources: " + ", ".join(answer.sources) + "_")
+    if answer.suggestion.kind.value != "none":
+        availability = "" if answer.suggestion.available else " (not wired up yet)"
+        parts.append(f"_artifact candidate: {answer.suggestion.kind.value}{availability}_")
+    return "\n\n".join(parts)
+
+
 def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     config = config or RuntimeConfig.from_env()
     persona = bundle_mod.load(config)
@@ -162,6 +189,68 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
             "authorization_servers": [config.entra.issuer],
             "bearer_methods_supported": ["header"],
         }
+
+    def deliver_slack_answer(command: slack_mod.SlashCommand) -> None:
+        """Answer, then post to the pre-signed `response_url`. Runs after the ack.
+
+        Nothing here may raise into the caller's face — the HTTP response went out
+        long ago. Every failure becomes a message in the thread instead, because a
+        slash command that silently produces nothing is indistinguishable from a
+        broken integration.
+        """
+        assert config.slack is not None  # noqa: S101 - the route checked; this is for ty
+        who = from_slack_user(command.user_id, config.slack.bot_token, persona)
+        log.info("slack question from %s (resolved=%s)", who.handle, who.known)
+        try:
+            text = slack_answer_text(agent.answer(command.text, who))
+        except (AgentError, CorpusError) as exc:
+            # Both are documented as carrying no prompt or bundle content.
+            text = f":warning: {exc}"
+        except Exception:
+            log.exception("slack answer failed for %s", who.handle)
+            text = ":warning: Something broke on my side. The error is in the logs."
+        try:
+            WebhookClient(command.response_url).send(text=text, response_type="ephemeral")
+        except Exception:
+            # The answer is already lost; at least do not take the worker with it.
+            log.exception("could not deliver slack answer to %s", who.handle)
+
+    @app.post("/slack/command")
+    async def slack_command(request: Request, background: BackgroundTasks) -> dict[str, str]:
+        """Slash command entry point. Verifies, acks inside 3s, answers later.
+
+        Slack wants a 200 within three seconds; an opus-5 answer at `xhigh` effort
+        over the vault is nowhere near that. So this returns an immediate holding
+        reply and hands the real work to a background task, which posts to the
+        payload's `response_url` when it finishes. That deferral is why the Cloud
+        Run service needs CPU allocated outside a request — with the default
+        throttling the background task stalls the moment the ack returns.
+
+        The delayed answer is ephemeral: it was shaped for one person using
+        commentary about them, so it goes back to that person rather than the
+        channel. Flip `response_type` if the team decides shared answers are worth
+        more than that.
+        """
+        if config.slack is None:
+            raise HTTPException(404, "slack edge is not configured")
+        raw = await request.body()
+        try:
+            slack_mod.verify_signature(
+                raw,
+                timestamp=request.headers.get(slack_mod.TIMESTAMP_HEADER, ""),
+                signature=request.headers.get(slack_mod.SIGNATURE_HEADER, ""),
+                secret=config.slack.signing_secret,
+            )
+            command = slack_mod.parse_command(raw)
+        except slack_mod.SlackError as exc:
+            # Reason to the log; the caller learns only that it was rejected.
+            log.info("slack request rejected: %s", exc)
+            raise HTTPException(401, "invalid slack request") from None
+
+        if not command.text:
+            return {"response_type": "ephemeral", "text": "Ask me something after the command."}
+        background.add_task(deliver_slack_answer, command)
+        return {"response_type": "ephemeral", "text": "Thinking — I'll follow up here shortly."}
 
     @app.post("/ask", response_model=AskResponse)
     def ask(body: AskRequest, who: Caller = Depends(caller)) -> AskResponse:  # noqa: B008

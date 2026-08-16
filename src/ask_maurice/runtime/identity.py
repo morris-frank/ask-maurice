@@ -80,6 +80,22 @@ def from_handle(handle: str, bundle: PersonaBundle) -> Caller:
     return Caller(handle=handle.strip(), participant=bundle.resolve(handle))
 
 
+def from_slack_user(user_id: str, token: str, bundle: PersonaBundle) -> Caller:
+    """Slack user ID -> caller, via `users.info` and then the same alias table.
+
+    The one edge that needs a network round-trip to learn who is asking: Entra
+    and IAP carry the address inside the assertion, Slack carries only an opaque
+    ID. When the lookup fails — token scope, a deactivated account, Slack having
+    a bad minute — the caller keeps the raw ID as a handle and gets no framing.
+    That is the same failure direction as an unrecognised email: a worse answer,
+    not a wrong one about a colleague.
+    """
+    email = email_from_slack(user_id, token)
+    if email is None:
+        return Caller(handle=user_id)
+    return Caller(handle=email, participant=bundle.resolve(email))
+
+
 def email_from_slack(user_id: str, token: str) -> str | None:
     """Slack user ID -> email. Needs only `users:read.email`, no history scopes."""
     from slack_sdk import WebClient

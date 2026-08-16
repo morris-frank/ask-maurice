@@ -14,7 +14,20 @@ ENTRA_VARS = {
 # Cloud Run's form: leading slash, project NUMBER, location, service name.
 IAP_AUDIENCE = "/projects/123456789012/locations/europe-west3/services/ask-maurice"
 
-ALL_VARS = [*ENTRA_VARS, "ASK_MAURICE_IAP_AUDIENCE", "ASK_MAURICE_ENV", "ASK_MAURICE_BUNDLE_SOURCE"]
+# Low-entropy and unprefixed on purpose: a realistic `xoxb-…` here trips the
+# secret scanner, and the values are never parsed, only carried.
+SLACK_VARS = {
+    "ASK_MAURICE_SLACK_SIGNING_SECRET": "test-slack-signing-secret",
+    "SLACK_BOT_TOKEN": "test-slack-bot-token",
+}
+
+ALL_VARS = [
+    *ENTRA_VARS,
+    *SLACK_VARS,
+    "ASK_MAURICE_IAP_AUDIENCE",
+    "ASK_MAURICE_ENV",
+    "ASK_MAURICE_BUNDLE_SOURCE",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -50,12 +63,40 @@ def test_production_accepts_both_edges(monkeypatch: pytest.MonkeyPatch):
     assert config.iap is not None
 
 
-def test_production_refuses_with_no_edge_and_names_both(monkeypatch: pytest.MonkeyPatch):
+def test_production_accepts_slack_alone(monkeypatch: pytest.MonkeyPatch):
+    """The v1 surface: Slack in front, no browser edge at all."""
+    for name, value in SLACK_VARS.items():
+        monkeypatch.setenv(name, value)
+    config = RuntimeConfig.from_env()
+    assert config.entra is None
+    assert config.iap is None
+    assert config.slack is not None
+    assert config.has_access_edge
+
+
+def test_a_signing_secret_without_a_bot_token_is_no_edge(monkeypatch: pytest.MonkeyPatch):
+    """Requests would verify and then frame nobody — a service that looks fine."""
+    monkeypatch.setenv(
+        "ASK_MAURICE_SLACK_SIGNING_SECRET", SLACK_VARS["ASK_MAURICE_SLACK_SIGNING_SECRET"]
+    )
+    with pytest.raises(ConfigError):
+        RuntimeConfig.from_env()
+
+
+def test_a_bot_token_without_a_signing_secret_is_no_edge(monkeypatch: pytest.MonkeyPatch):
+    """Worse: identity resolution with nothing authenticating the request."""
+    monkeypatch.setenv("SLACK_BOT_TOKEN", SLACK_VARS["SLACK_BOT_TOKEN"])
+    with pytest.raises(ConfigError):
+        RuntimeConfig.from_env()
+
+
+def test_production_refuses_with_no_edge_and_names_all_three(monkeypatch: pytest.MonkeyPatch):
     with pytest.raises(ConfigError) as caught:
         RuntimeConfig.from_env()
     message = str(caught.value)
     assert "ASK_MAURICE_ENTRA_TENANT_ID" in message
     assert "ASK_MAURICE_IAP_AUDIENCE" in message
+    assert "ASK_MAURICE_SLACK_SIGNING_SECRET" in message
 
 
 def test_development_still_runs_with_no_edge_at_all(monkeypatch: pytest.MonkeyPatch):
