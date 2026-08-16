@@ -144,8 +144,14 @@ every question with "retrieval found nothing" and looks like a model problem.
 
 **The persona bundle is not in the image**, and there is a `RUN` check asserting
 so. The image sets `ASK_MAURICE_BUNDLE_SOURCE=secret`; the bundle is fetched from
-Secret Manager at boot and held in memory. `ASK_MAURICE_BUNDLE_SECRET` and the
-access-edge variables come from the deployment.
+Secret Manager at boot and held in memory.
+
+The deployment must supply three things the image cannot know: `ANTHROPIC_API_KEY`,
+`ASK_MAURICE_BUNDLE_SECRET`, and at least one access edge. All three are checked
+at boot, so a container missing any of them refuses to start rather than serving
+broken answers — `Agent.build` will not construct a client without a key, since
+the SDK would otherwise defer the failure to the first question and surface it as
+a 500 that reads like a model problem.
 
 ## What this is not, yet
 
