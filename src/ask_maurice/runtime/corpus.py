@@ -9,6 +9,13 @@ Retrieval is deliberately plain lexical scoring, no embeddings, no index server.
 577 markdown files is small; a term-frequency scan over them takes milliseconds
 and, unlike a vector store, its provenance is exact — every excerpt carries the
 path and the commit it came from, which is what a science answer needs anyway.
+
+Scoring is BM25, and the two parts of it are both load-bearing here. Without the
+IDF term, "why would we use something so unknown like in-toto?" scores `use`,
+`something` and `like` as heavily as `in-toto`, so the four filler words decide
+the ranking and every one of the 22 notes that actually name the tool falls
+outside the top 30. Without length normalisation, long meeting transcripts win
+on word count alone against the specs that answer the question.
 """
 
 from __future__ import annotations
@@ -25,6 +32,9 @@ SKIP_DIRS = {".git", ".obsidian", ".bin", "templates"}
 # Pre-rule residue: these graduated 2026-07-28, `transcripts/` entered .kbignore
 # 2026-07-30. Shared, but never a deliberate share decision — opt in explicitly.
 TRANSCRIPTS_DIR = "transcripts"
+
+# Standard BM25 constants: term-frequency saturation and length normalisation.
+_K1, _B = 1.2, 0.75
 
 _WORD = re.compile(r"[a-z0-9][a-z0-9'-]*")
 _STOP = frozenset(
@@ -95,24 +105,39 @@ class Corpus:
         terms = Counter(tokenize(query))
         if not terms:
             return []
-        docs = self.documents()
-        scored: list[Excerpt] = []
-        commit = self.commit
-        for path in docs:
+        scanned = []
+        for path in self.documents():
             try:
                 text = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
             rel = path.relative_to(self.root).as_posix()
-            counts = Counter(tokenize(text))
+            tokens = tokenize(text)
             # Path and filename carry real signal in this vault — `eng/`, `lib/`,
             # `svc/` and dated titles are how the notes are organised.
-            path_counts = Counter(tokenize(rel))
+            scanned.append((path, rel, text, Counter(tokens), Counter(tokenize(rel)), len(tokens)))
+        if not scanned:
+            return []
+
+        n = len(scanned)
+        doc_freq: Counter[str] = Counter()
+        for *_, counts, path_counts, _ in scanned:
+            doc_freq.update(set(counts) | set(path_counts))
+        avg_len = sum(length for *_, length in scanned) / n
+
+        commit = self.commit
+        scored: list[Excerpt] = []
+        for path, rel, text, counts, path_counts, length in scanned:
             score = 0.0
             for term, weight in terms.items():
-                hits = counts.get(term, 0) + 3 * path_counts.get(term, 0)
-                if hits:
-                    score += weight * (1 + math.log(hits))
+                freq = counts.get(term, 0) + 3 * path_counts.get(term, 0)
+                if not freq:
+                    continue
+                # +1 inside the log keeps IDF positive for a term in every note,
+                # so a common word can never subtract from a document's score.
+                idf = math.log(1 + (n - doc_freq[term] + 0.5) / (doc_freq[term] + 0.5))
+                saturated = freq * (_K1 + 1) / (freq + _K1 * (1 - _B + _B * length / avg_len))
+                score += weight * idf * saturated
             if score <= 0:
                 continue
             scored.append(

@@ -26,6 +26,12 @@ def test_search_ranks_the_right_note_and_carries_provenance(shared_vault: Path):
     assert "rarefied" in hits[0].text
 
 
+def test_a_rare_term_outranks_repeated_filler(chatty_vault: Path):
+    """The in-toto failure: four common words drowning out the one that matters."""
+    hits = Corpus(chatty_vault).search("why would we use something like in-toto?")
+    assert hits[0].path == "eng/attestations.md"
+
+
 def test_search_returns_nothing_for_an_unrelated_question(shared_vault: Path):
     assert Corpus(shared_vault).search("kubernetes ingress certificates") == []
 

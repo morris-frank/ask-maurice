@@ -102,25 +102,8 @@ def private_vault(tmp_path: Path) -> Path:
     return vault
 
 
-@pytest.fixture
-def shared_vault(tmp_path: Path) -> Path:
-    """A stand-in for the SHARED vault: technical dirs, plus transcripts residue."""
-    root = tmp_path / "corpus"
-    for rel, text in {
-        "eng/benchmark-normalisation.md": (
-            "# Benchmark normalisation\n\n"
-            "Sequencing depth varies per sample, so counts are rarefied before the "
-            "benchmark comparison. Compositional data cannot be compared raw.\n\n"
-            "The benchmark itself is a percentile against the reference cohort."
-        ),
-        "lib/provenance.md": (
-            "# Provenance\n\nEvery measurement carries the sample id and the protocol "
-            "version it was produced under."
-        ),
-        "org/operating-rhythm.md": "# Operating rhythm\n\nWeekly leads meeting.",
-        "transcripts/2026-07-01 call.md": "# Call\n\nWe discussed sequencing depth at length.",
-        "templates/note.md": "# Template",
-    }.items():
+def _committed_corpus(root: Path, files: dict[str, str]) -> Path:
+    for rel, text in files.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
@@ -132,6 +115,51 @@ def shared_vault(tmp_path: Path) -> Path:
         check=True,
     )
     return root
+
+
+@pytest.fixture
+def shared_vault(tmp_path: Path) -> Path:
+    """A stand-in for the SHARED vault: technical dirs, plus transcripts residue."""
+    return _committed_corpus(
+        tmp_path / "corpus",
+        {
+            "eng/benchmark-normalisation.md": (
+                "# Benchmark normalisation\n\n"
+                "Sequencing depth varies per sample, so counts are rarefied before the "
+                "benchmark comparison. Compositional data cannot be compared raw.\n\n"
+                "The benchmark itself is a percentile against the reference cohort."
+            ),
+            "lib/provenance.md": (
+                "# Provenance\n\nEvery measurement carries the sample id and the protocol "
+                "version it was produced under."
+            ),
+            "org/operating-rhythm.md": "# Operating rhythm\n\nWeekly leads meeting.",
+            "transcripts/2026-07-01 call.md": "# Call\n\nWe discussed sequencing depth at length.",
+            "templates/note.md": "# Template",
+        },
+    )
+
+
+@pytest.fixture
+def chatty_vault(tmp_path: Path) -> Path:
+    """Long notes full of filler, one short note naming a rare tool.
+
+    Deliberately at corpus scale: with five notes, "use" looks as rare as
+    "in-toto" and IDF has nothing to separate. With twenty it behaves like the
+    real vault, where "use" is in 471 of 630 notes and "in-toto" is in 22.
+    """
+    files = {
+        f"org/2026-07-{day:02d} leads call.md": (
+            f"# Leads call {day}\n\n"
+            + "We would use something like this, so we use it that way. " * 40
+        )
+        for day in range(1, 21)
+    }
+    files["eng/attestations.md"] = (
+        "# Attestations\n\nWe write in-toto style attestation records for each "
+        "pipeline run, without adopting in-toto itself."
+    )
+    return _committed_corpus(tmp_path / "corpus", files)
 
 
 @pytest.fixture

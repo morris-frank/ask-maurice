@@ -22,7 +22,9 @@ def test_framing_carries_the_instructions_and_marks_itself_private(bundle: Perso
     assert "A committed widget date." in text
     # The candid reads are present as steering, and explicitly fenced as such.
     assert "Wants a date, not options." in text
-    assert "reads on a colleague, not facts to repeat back" in text
+    assert "a read on a colleague, not facts to repeat back" in text
+    # The meeting agenda is fenced too: available, not applied to every answer.
+    assert "only when the question is already about it" in text
 
 
 def test_empty_fields_do_not_produce_dangling_labels():

@@ -3,7 +3,9 @@
 The advisor dict was written to coach Maurice *before* a meeting with someone.
 Here the direction inverts: the doppelgänger is Maurice, speaking *to* that
 person. `contrast` stops being "how to shift your register" and becomes the
-register; `sayYesTo` stops being advice and becomes the thing to actually say.
+register. `sayYesTo` stays conditional, though — it is a meeting agenda, and an
+answer that ends by pressing for it whatever was asked reads as an assistant
+working a script rather than a colleague answering a question.
 
 Two fields never appear as content, only as steering: `underPressure` and
 `dependencyOnMaurice` are candid reads on a colleague. They shape what gets led
@@ -47,7 +49,7 @@ def render(participant: Participant | None) -> str:
 
     moves = [
         _line("Register for this person", participant.contrast),
-        _line("The concrete thing to put in the room", participant.say_yes_to),
+        _line("What you would push for with them", participant.say_yes_to),
     ]
     moves = [line for line in moves if line]
     if moves:
@@ -55,8 +57,10 @@ def render(participant: Participant | None) -> str:
 
     lines += [
         "",
-        "Use the last two lines as instructions. Use the ones above them only to "
-        "decide what to lead with — they are reads on a colleague, not facts to "
-        "repeat back to them.",
+        "The register line is an instruction. The push is not: it is what you would "
+        "raise with them in a meeting, so use it only when the question is already "
+        "about it — never bolt an agenda onto an answer that did not ask for one. "
+        "Everything above is a read on a colleague, not facts to repeat back to "
+        "them; use it to decide what to lead with.",
     ]
     return "\n".join(lines)
