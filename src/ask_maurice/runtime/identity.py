@@ -1,10 +1,11 @@
 """Who is asking.
 
-Two inbound channels, one join key. Entra hands us verified JWT claims carrying
-an email; Slack hands us a user ID that `users.info` turns into an email. Both
-end up in `PersonaBundle.aliases`, which was built from person-file frontmatter
-at compile time — so this module resolves identity with a dict lookup and never
-opens a vault file.
+Three inbound channels, one join key. Entra hands us verified JWT claims carrying
+an email; Google IAP hands us a different verified JWT carrying its own; Slack
+hands us a user ID that `users.info` turns into an email. All three end up in
+`PersonaBundle.aliases`, which was built from person-file frontmatter at compile
+time — so this module resolves identity with a dict lookup and never opens a
+vault file.
 
 An unresolved caller is not an error. They get a neutral answer with no framing
 at all, which is the correct failure direction: no framing is a worse answer, a
@@ -21,6 +22,11 @@ from ask_maurice.persona import Participant, PersonaBundle
 # Entra puts the address in different claims depending on the app registration
 # and account type; check all three in preference order.
 _EMAIL_CLAIMS = ("preferred_username", "email", "upn")
+
+# IAP is simpler and stricter: one documented claim, `email`, carrying the plain
+# address. Its `sub` is *not* an address — it is `accounts.google.com:<id>` — so
+# the fallback below uses it as a handle only, never as a join key.
+_IAP_EMAIL_CLAIM = "email"
 
 
 @dataclass(frozen=True)
@@ -54,9 +60,40 @@ def from_claims(claims: dict[str, Any], bundle: PersonaBundle) -> Caller:
     return Caller(handle=email, participant=bundle.resolve(email))
 
 
+def from_iap_claims(claims: dict[str, Any], bundle: PersonaBundle) -> Caller:
+    """Verified IAP assertion -> caller, through the same alias table as Entra.
+
+    Kept separate from `from_claims` rather than folded into it: the two token
+    shapes agree on nothing but the word "email", and checking Entra's three
+    claims against an IAP token would silently accept `preferred_username` from
+    an issuer that does not mint one.
+    """
+    email = claims.get(_IAP_EMAIL_CLAIM)
+    if not isinstance(email, str) or "@" not in email:
+        return Caller(handle=str(claims.get("sub") or "unknown"))
+    email = email.strip().lower()
+    return Caller(handle=email, participant=bundle.resolve(email))
+
+
 def from_handle(handle: str, bundle: PersonaBundle) -> Caller:
     """Resolve an email, alias or name — what `ask --as` and Slack both end at."""
     return Caller(handle=handle.strip(), participant=bundle.resolve(handle))
+
+
+def from_slack_user(user_id: str, token: str, bundle: PersonaBundle) -> Caller:
+    """Slack user ID -> caller, via `users.info` and then the same alias table.
+
+    The one edge that needs a network round-trip to learn who is asking: Entra
+    and IAP carry the address inside the assertion, Slack carries only an opaque
+    ID. When the lookup fails — token scope, a deactivated account, Slack having
+    a bad minute — the caller keeps the raw ID as a handle and gets no framing.
+    That is the same failure direction as an unrecognised email: a worse answer,
+    not a wrong one about a colleague.
+    """
+    email = email_from_slack(user_id, token)
+    if email is None:
+        return Caller(handle=user_id)
+    return Caller(handle=email, participant=bundle.resolve(email))
 
 
 def email_from_slack(user_id: str, token: str) -> str | None:

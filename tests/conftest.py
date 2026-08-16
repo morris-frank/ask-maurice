@@ -117,6 +117,37 @@ def _committed_corpus(root: Path, files: dict[str, str]) -> Path:
     return root
 
 
+def _baked_corpus(root: Path, files: dict[str, str], commit: str) -> Path:
+    """The shape an image ships: the documents, a COMMIT file, and no `.git`.
+
+    Deliberately not `_committed_corpus` with the `.git` removed — that would test
+    a checkout we mutilated rather than the artefact `bake-corpus` produces, and
+    the two can diverge.
+    """
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    (root / "COMMIT").write_text(f"{commit}\n", encoding="utf-8")
+    return root
+
+
+@pytest.fixture
+def baked_vault(tmp_path: Path) -> Path:
+    return _baked_corpus(
+        tmp_path / "baked",
+        {
+            "eng/benchmark-normalisation.md": (
+                "# Benchmark normalisation\n\n"
+                "Sequencing depth varies per sample, so counts are rarefied before the "
+                "benchmark comparison."
+            ),
+            "lib/provenance.md": "# Provenance\n\nEvery measurement carries the sample id.",
+        },
+        commit="0f1e2d3c4b5a69788796a5b4c3d2e1f0deadbeef",
+    )
+
+
 @pytest.fixture
 def shared_vault(tmp_path: Path) -> Path:
     """A stand-in for the SHARED vault: technical dirs, plus transcripts residue."""

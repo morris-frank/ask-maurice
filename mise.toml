@@ -88,6 +88,10 @@ run = "mise exec -- uv run ask-maurice build-persona"
 description = "RUNTIME PLANE: index the shared-vault checkout into the mixedbread vault store"
 run = "mise exec -- uv run ask-maurice vault-index"
 
+[tasks.bake-corpus]
+description = "IMAGE BUILD: copy the retrievable subset of ./corpus into dist/corpus"
+run = "mise exec -- uv run ask-maurice bake-corpus"
+
 [tasks.serve]
 description = "RUNTIME PLANE: serve the agent locally against a local bundle + team-vault clone"
 run = "mise exec -- uv run ask-maurice serve"
