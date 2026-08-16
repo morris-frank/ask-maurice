@@ -250,7 +250,7 @@ def serve(
         return
     if not config.has_access_edge:
         err.print(
-            "[yellow]warning[/yellow] no access edge configured (Entra bearer or IAP) — "
+            "[yellow]warning[/yellow] no access edge configured (Slack or Entra bearer) — "
             "every caller is anonymous and every answer unframed"
         )
     # log_config=None keeps uvicorn from replacing the root logger's handlers,

@@ -13,26 +13,27 @@ Two things shape the sequence and neither is negotiable:
   serving unframed or source-less answers. That is why the secret and the Slack
   app come *before* the deploy, not after.
 
-## Pick the shape before you start
+## The shape this deploys
 
-The three access edges are independent in the code, but IAP is not. Google's IAP
-sits in front of the **whole** Cloud Run service, so it will also intercept
-`/slack/command` — and Slack cannot sign in. Today that makes the two shapes
-practically exclusive:
+Slack in front, `--allow-unauthenticated` at the Cloud Run layer, and the app
+enforcing its own edges behind that:
 
-| shape | edge | who reaches it | Cloud Run ingress |
-|---|---|---|---|
-| **A — Slack (the v1 surface)** | `ASK_MAURICE_SLACK_*` | the team, via a slash command | `--allow-unauthenticated` |
-| **B — browser / MCP** | IAP and/or Entra | named principals in an IAM binding | IAP on, unauthenticated off |
+| route | who gets through | how |
+|---|---|---|
+| `/slack/command` | the team | HMAC-SHA256 signature, five-minute replay window |
+| `/ask` | an MCP client or script with an Entra bearer token — nobody on a Slack-only deploy | RS256 against the tenant JWKS |
+| `/healthz` | anyone | it returns a status and the persona commit, nothing else |
 
-Shape A is what the rest of this runbook deploys. `--allow-unauthenticated` is
-safe there because the app enforces its own edge: `/slack/command` requires a
-valid Slack signature, and `/ask` returns 401 to anyone without a bearer token
-or an IAP assertion, because an access edge *is* configured.
+`--allow-unauthenticated` is not a gap here: Slack has to reach the service from
+the public internet, and `/ask` 401s anyone without a valid bearer token because
+an access edge *is* configured. Set `ASK_MAURICE_ENTRA_*` as well if you want the
+`/ask` half; leave it unset and the slash command is the whole surface.
 
-Wanting both at once means a load balancer with a URL map splitting
-`/slack/command` onto an IAP-free backend. Nobody has built that. **Unresolved —
-decide before promising the team both surfaces.**
+There is deliberately **no Google IAP option**. IAP fronts the entire Cloud Run
+service, so turning it on takes `/slack/command` down with it — Slack cannot sign
+in to it. The edge was removed from the codebase rather than left switched off;
+see README § Why there is no Google IAP edge. The consequence to be honest about:
+there is no browser-shaped way into `/ask`.
 
 Steps 6–8 belong in the terraform repo long-term (alongside `stacks/dev/kb-mcp`,
 per `docs/runbooks/host-internal-app.md`). What follows is the manual equivalent
@@ -44,7 +45,7 @@ for the first deploy, and it is what the stack should end up expressing.
 
 | value | where it comes from |
 |---|---|
-| GCP project id **and project number** | `gcloud projects describe PROJECT_ID` — the number, not the id, is what IAP audiences use |
+| GCP project id **and project number** | `gcloud projects describe PROJECT_ID` — the bundle secret's resource name uses the number, not the id |
 | Anthropic API key | console.anthropic.com |
 | Read access to `Soilytix/vault` | your own GitHub SSH key; the clone is a plain `git clone` |
 | Private vault on disk | `morris-frank/vault`, cloned locally |
@@ -52,9 +53,9 @@ for the first deploy, and it is what the stack should end up expressing.
 | mixedbread papers store name *(optional)* | the research collection; create it in the mixedbread dashboard first, this code does not create stores |
 | Slack workspace admin | to create the app in step 5 |
 
-Nothing here is a placeholder you can guess later. A wrong project *number* in an
-IAP audience is a 401 on every request; an absent store name with a key set is a
-config that refuses to load, on purpose.
+Nothing here is a placeholder you can guess later. A wrong project *number* in the
+bundle secret's resource name is a container that cannot boot; an absent store
+name with a key set is a config that refuses to load, on purpose.
 
 ---
 
@@ -295,8 +296,10 @@ failure this section exists to prevent.
 - **`ASK_MAURICE_INCLUDE_TRANSCRIPTS`.** 66 transcript files predate
   `transcripts/` entering `.kbignore`. They are shared, but they are pre-rule
   residue rather than a deliberate include.
-- **IAP / Entra alongside Slack.** See the shape table at the top. Turning IAP on
-  in front of this service takes the Slack edge down with it.
+- **A browser surface for `/ask`.** With IAP gone, `/ask` is bearer-only. Giving
+  a person with a browser a way in means either a load balancer with a URL map
+  routing `/slack/command` to an IAP-free backend, or an interactive Entra login
+  flow. Both are real work; neither is started.
 
 ## Keeping it running
 

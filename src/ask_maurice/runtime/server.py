@@ -1,16 +1,9 @@
-"""HTTP surface. Three access edges; any of them is how we know who asked.
+"""HTTP surface. Two access edges; either of them is how we know who asked.
 
 **Entra bearer token.** Same verification shape as `kb-ingest`: RS256, JWKS from
 the tenant's discovery endpoint, issuer and audience both pinned, `tid` checked
 against the configured tenant so a token from another tenant with a matching
 audience is rejected. This is the edge an MCP client or a script uses.
-
-**Google IAP assertion.** Deployed on Cloud Run behind IAP, the edge is Google's:
-the caller authenticates there and we receive a signed assertion header. Nothing
-about that verification is shared with the Entra path — different algorithm
-(ES256, not RS256), different keys (Google's static JWK set, not a tenant's
-JWKS), different issuer, different email claim. Hence a separate verifier rather
-than a parameterised one; the two only meet at `Caller`.
 
 **Slack signed request.** The team-facing surface, and the odd one out: it does
 not use `resolve_caller` at all. The signature authenticates *Slack*, not a
@@ -41,7 +34,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from slack_sdk.webhook import WebhookClient
 
-from ask_maurice.config import EntraConfig, IapConfig, RuntimeConfig
+from ask_maurice.config import EntraConfig, RuntimeConfig
 from ask_maurice.persona import PersonaBundle
 from ask_maurice.runtime import bundle as bundle_mod
 from ask_maurice.runtime import literature as literature_mod
@@ -49,20 +42,9 @@ from ask_maurice.runtime import redaction, retrieval
 from ask_maurice.runtime import slack as slack_mod
 from ask_maurice.runtime.agent import Agent, AgentError, Answer
 from ask_maurice.runtime.corpus import Corpus, CorpusError
-from ask_maurice.runtime.identity import (
-    Caller,
-    from_claims,
-    from_handle,
-    from_iap_claims,
-    from_slack_user,
-)
+from ask_maurice.runtime.identity import Caller, from_claims, from_handle, from_slack_user
 
 log = logging.getLogger(__name__)
-
-# Set by IAP itself and stripped from any inbound request, so its presence is
-# meaningful only because IAP is the only thing that can reach the service.
-# We verify the signature regardless — see the module docstring.
-IAP_HEADER = "x-goog-iap-jwt-assertion"
 
 
 class AskRequest(BaseModel):
@@ -97,37 +79,15 @@ def verify(token: str, config: EntraConfig) -> dict[str, Any]:
     return claims
 
 
-def verify_iap(token: str, config: IapConfig) -> dict[str, Any]:
-    """Verified IAP assertion claims, or raise. Never logs or echoes the token.
-
-    `algorithms=["ES256"]` is a whitelist, not a hint — IAP signs with ES256 and
-    accepting anything else here would let a token signed with a different
-    algorithm against the same key material through.
-    """
-    signing_key = jwt.PyJWKClient(config.jwks_uri).get_signing_key_from_jwt(token)
-    return jwt.decode(
-        token,
-        signing_key.key,
-        algorithms=["ES256"],
-        audience=config.audience,
-        issuer=config.issuer,
-        options={"require": ["exp", "aud", "iss"]},
-    )
-
-
-def resolve_caller(
-    authorization: str, iap_assertion: str, config: RuntimeConfig, persona: PersonaBundle
-) -> Caller:
-    """Verified bearer token -> verified IAP assertion -> anonymous.
-
-    Bearer first because it is the more specific signal: behind IAP *every*
-    request carries an assertion, so an assertion plus a bearer token means a
-    client that deliberately authenticated as itself, and that is the identity
-    to honour.
+def resolve_caller(authorization: str, config: RuntimeConfig, persona: PersonaBundle) -> Caller:
+    """Verified bearer token -> anonymous.
 
     Anonymous is the last resort and stays development-only — with an edge
-    configured, a request that satisfies neither is rejected rather than quietly
-    downgraded to an unframed answer.
+    configured, a request that carries no valid bearer token is rejected rather
+    than quietly downgraded to an unframed answer. Note that a Slack-only deploy
+    is a configured edge, so `/ask` 401s there even though nothing can satisfy
+    it: the team's surface is the slash command, and a silently anonymous `/ask`
+    would be the more surprising outcome.
     """
     if config.entra is not None and authorization.lower().startswith("bearer "):
         try:
@@ -138,17 +98,9 @@ def resolve_caller(
             raise HTTPException(401, "invalid token") from None
         return from_claims(claims, persona)
 
-    if config.iap is not None and iap_assertion:
-        try:
-            claims = verify_iap(iap_assertion, config.iap)
-        except jwt.PyJWTError as exc:
-            log.info("IAP assertion rejected: %s", type(exc).__name__)
-            raise HTTPException(401, "invalid IAP assertion") from None
-        return from_iap_claims(claims, persona)
-
     if not config.has_access_edge:
         return Caller(handle="anonymous")
-    raise HTTPException(401, "bearer token or IAP assertion required")
+    raise HTTPException(401, "bearer token required")
 
 
 def slack_answer_text(answer: Answer) -> str:
@@ -174,12 +126,7 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     app = FastAPI(title="ask-maurice", docs_url=None, redoc_url=None)
 
     def caller(request: Request) -> Caller:
-        return resolve_caller(
-            request.headers.get("authorization", ""),
-            request.headers.get(IAP_HEADER, ""),
-            config,
-            persona,
-        )
+        return resolve_caller(request.headers.get("authorization", ""), config, persona)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

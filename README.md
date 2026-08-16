@@ -34,7 +34,7 @@ BUILD PLANE (Maurice's machine only, never hosted)
     persona bundle (JSON)  ── ask-maurice publish-persona ──▶  GCP Secret Manager
                                                                        │
 ────────────────────────────────────────────────────────────────────── │ ────────
-RUNTIME PLANE (Cloud Run; Entra bearer and/or IAP at the edge)         │
+RUNTIME PLANE (Cloud Run; Slack signature or Entra bearer at the edge) │
                                                                        ▼
     baked corpus (team: Soilytix/vault @ main)                persona bundle
     564 markdown files + COMMIT, baked into the image         loaded at boot,
@@ -94,7 +94,7 @@ connected".
 | `ask-maurice vault-index` | runtime | push that checkout into the mixedbread vault store (opt-in; asks first) |
 | `ask-maurice bake-corpus` | image build | copy the retrievable subset of `corpus/` into `dist/corpus` for the image |
 | `ask-maurice ask "…" --as julia@soilytix.com` | runtime | one question from the terminal, framed for that person |
-| `ask-maurice serve` | runtime | HTTP service (Entra- or IAP-verified callers) |
+| `ask-maurice serve` | runtime | HTTP service (Slack slash command, Entra-verified `/ask`) |
 
 ## Local development
 
@@ -116,46 +116,59 @@ ask-maurice vault-index              # send it, after confirming
 Everything else runs off `corpus/` and a bundle — locally from `persona/bundle.json`,
 in production from Secret Manager.
 
-## Who the caller is: three access edges
+## Who the caller is: two access edges
 
-`serve` accepts identity from any edge, and any combination can be on at once.
-Which one a request used never changes the answer — all three end at the same
-`Caller`, resolved through the alias table baked into the persona bundle.
+`serve` accepts identity from either edge, and both can be on at once. Which one
+a request used never changes the answer — both end at the same `Caller`, resolved
+through the alias table baked into the persona bundle.
 
 | edge | route | proves | identity from | typical caller |
 |---|---|---|---|---|
 | **Slack signed request** | `/slack/command` | Slack sent it (HMAC-SHA256, 5-min window) | `user_id` in the payload → `users.info` | the team |
-| **Google IAP** | `/ask` | the human signed in (ES256, Google's JWK set) | `email` claim | browser, behind Cloud Run |
 | **Entra bearer** | `/ask` | the human signed in (RS256, tenant JWKS) | `preferred_username`/`email`/`upn` | MCP client, script |
 
-Nothing is shared between the verifiers — different algorithms, different keys,
-different issuers, different claims — so they are separate functions rather than
-one parameterised one.
+Nothing is shared between the two verifiers — different algorithms, different
+keys, different issuers, different claims — so they are separate functions rather
+than one parameterised one.
 
-On `/ask` the resolution order is **verified bearer → verified IAP assertion →
-anonymous**. Bearer wins because behind IAP *every* request carries an assertion,
-so a bearer token on top of one is a deliberate act. Anonymous is development
-only: with any edge configured a request that satisfies none gets a 401, and
-`RuntimeConfig.from_env` refuses to boot in production unless at least one is
-configured. That guard matters more here than in a typical service — an
-unidentified caller still gets an answer, but an unframed one, and the framing is
-the product.
+On `/ask` the order is **verified bearer → anonymous**, and anonymous is
+development only: with any edge configured a request without a valid bearer token
+gets a 401, and `RuntimeConfig.from_env` refuses to boot in production unless at
+least one edge is configured. That guard matters more here than in a typical
+service — an unidentified caller still gets an answer, but an unframed one, and
+the framing is the product. Note the consequence on a Slack-only deploy: `/ask`
+401s everyone, because the team's surface is the slash command and a silently
+anonymous `/ask` would be the more surprising outcome.
+
+### Why there is no Google IAP edge
+
+There was one, briefly, and it was removed rather than left switched off. IAP
+fronts the **whole** Cloud Run service, so it also intercepts `/slack/command` —
+and Slack cannot sign in to it. The two edges were exclusive in practice, and
+Slack is the surface the team actually uses. Running both would mean a load
+balancer with a URL map routing `/slack/command` to an IAP-free backend; if that
+day comes, the verifier is in the git history (`verify_iap`, ES256 against
+Google's static JWK set) and worth restoring rather than rewriting.
+
+The cost of the removal is real and worth naming: `/ask` is now bearer-only, so
+there is no browser-shaped way in. An MCP client or a script can authenticate;
+a person with a browser cannot.
 
 ### Slack is a different shape of trust, deliberately
 
 Worth stating plainly rather than letting the word "auth" cover both cases. Entra
-and IAP hand us a per-request assertion, signed by an identity provider, naming
-the human who signed in. Slack hands us one shared secret proving *Slack* sent
-the request, plus a `user_id` in the body that we take on Slack's word.
-Transport authentication and caller identity come apart.
+hands us a per-request assertion, signed by an identity provider, naming the
+human who signed in. Slack hands us one shared secret proving *Slack* sent the
+request, plus a `user_id` in the body that we take on Slack's word. Transport
+authentication and caller identity come apart.
 
 Two things bound the identity risk: Slack sets `user_id` server-side, so a
 workspace member cannot forge another's, and an unresolved caller falls back to
 no framing rather than to a guess. What genuinely changes is **authorisation** —
-behind IAP that is an IAM binding on named principals; with Slack it is workspace
-and channel membership, administered in Slack rather than in the stack. Content
-exposure stays bounded either way, since retrieval reads only the shared vault
-that any Soilytix employee can already clone.
+a bearer token is a named principal in a tenant; Slack is workspace and channel
+membership, administered in Slack rather than in the stack. Content exposure
+stays bounded either way, since retrieval reads only the shared vault that any
+Soilytix employee can already clone.
 
 Slack is also the only route that answers asynchronously. Slack wants HTTP 200
 within three seconds and an `opus-5` answer at `xhigh` effort is nowhere near
@@ -165,14 +178,6 @@ on Cloud Run** — with the default throttling the background task stalls the
 moment the ack returns, and the asker never hears back. The delayed answer is
 ephemeral: it was shaped for one person using commentary about them, so it goes
 back to that person rather than the channel.
-
-Set `ASK_MAURICE_IAP_AUDIENCE` to IAP's audience string for this exact service.
-For Cloud Run that is
-`/projects/PROJECT_NUMBER/locations/REGION/services/SERVICE_NAME` — leading
-slash, project *number* not project ID. Behind a load balancer IAP mints
-`/projects/PROJECT_NUMBER/global/backendServices/SERVICE_ID` instead, so take
-the value from the Terraform stack's output rather than assembling it by hand; a
-mismatch is a 401 on every request.
 
 ## Building the container
 

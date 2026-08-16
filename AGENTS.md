@@ -72,8 +72,8 @@ src/ask_maurice/
                       vault-index, ask, serve
   config.py           BuildConfig (private vault) and RuntimeConfig (shared only) — the
                       split is load-bearing; RuntimeConfig has no private-vault field.
-                      EntraConfig, IapConfig and SlackConfig are the three access
-                      edges; production requires at least one
+                      EntraConfig and SlackConfig are the two access edges;
+                      production requires at least one
   bake.py             neither plane: ./corpus -> dist/corpus for the image. Calls the
                       runtime's Corpus.documents() so the baked set cannot drift from
                       the retrievable set; writes HEAD to a COMMIT file beside them
@@ -87,8 +87,8 @@ src/ask_maurice/
     publish.py          push the bundle to GCP Secret Manager as a new version
   runtime/
     bundle.py           load the bundle (Secret Manager in prod, local file in dev)
-    identity.py         Entra claims / IAP claims / Slack user ID -> email -> Participant,
-                        via the alias table baked into the bundle. Opens no vault file.
+    identity.py         Entra claims / Slack user ID -> email -> Participant, via the
+                        alias table baked into the bundle. Opens no vault file.
     slack.py            the Slack edge: HMAC-SHA256 request signing with a replay
                         window, and slash-command parsing. Read its docstring before
                         changing it — the signature authenticates Slack, not a person,
@@ -111,13 +111,14 @@ src/ask_maurice/
     prompt.py           cached persona in system[], per-caller framing in messages[]
     agent.py            the anthropic call on claude-opus-5, and the literature tool loop
     redaction.py        scrub bundle-derived text from logs and answers; refusal text
-    server.py           FastAPI app, RFC 9728 metadata, and all three access edges:
-                        verify() for Entra bearer tokens (RS256, tenant JWKS) and
-                        verify_iap() for IAP assertions (ES256, Google's JWK set).
-                        resolve_caller() is the order: bearer -> IAP -> anonymous.
-                        /slack/command bypasses that entirely — its own verifier, its
-                        own identity join, and the only route that answers async
-                        (Slack's 3s ack; needs CPU-always-allocated on Cloud Run)
+    server.py           FastAPI app, RFC 9728 metadata, and both access edges:
+                        verify() for Entra bearer tokens (RS256, tenant JWKS), and
+                        resolve_caller() as bearer -> anonymous. /slack/command
+                        bypasses that entirely — its own verifier, its own identity
+                        join, and the only route that answers async (Slack's 3s ack;
+                        needs CPU-always-allocated on Cloud Run). There is no IAP
+                        edge and adding one back is not a small change: IAP fronts
+                        the whole service and would intercept /slack/command
 scripts/
   no_persona_bundle.py  pre-commit guard: refuses a compiled bundle by path or content
 tests/                pure logic only, plus test_boundary.py — which fails if any module

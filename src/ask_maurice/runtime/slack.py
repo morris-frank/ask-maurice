@@ -1,13 +1,13 @@
 """The Slack access edge: request signing, and the slash-command payload.
 
-A different shape of trust from the other two edges, and worth being explicit
-about rather than letting "auth" paper over it.
+A different shape of trust from the Entra edge, and worth being explicit about
+rather than letting "auth" paper over it.
 
-Entra and IAP both hand us a per-request assertion, signed by an identity
-provider, that names the human who signed in. Slack hands us one shared secret
-proving *Slack* sent the request, and a `user_id` inside the body that we take on
-Slack's word. Transport authentication and caller identity come apart here: the
-signature says the request is genuine, the payload says who asked.
+Entra hands us a per-request assertion, signed by an identity provider, that
+names the human who signed in. Slack hands us one shared secret proving *Slack*
+sent the request, and a `user_id` inside the body that we take on Slack's word.
+Transport authentication and caller identity come apart here: the signature says
+the request is genuine, the payload says who asked.
 
 That matters more than it would for an ordinary bot, because per-caller framing
 draws on candid per-person commentary. A mis-attributed caller means an answer
@@ -15,12 +15,12 @@ shaped by material written about someone else. Two things bound it: Slack sets
 `user_id` server-side (a workspace member cannot forge another's), and an
 unresolved caller falls back to no framing rather than to a guess.
 
-What genuinely widens is *authorisation*. Behind IAP, access is an IAM binding on
-named principals. Here it is whoever can invoke the slash command — workspace and
-channel membership, administered in Slack rather than in the stack. The content
-exposure is bounded (retrieval reads only the shared vault, which any Soilytix
-employee can already clone), but the reach is broader, and that is a product
-decision rather than an implementation detail.
+What genuinely widens is *authorisation*. With a bearer token, access is a named
+principal in a tenant. Here it is whoever can invoke the slash command —
+workspace and channel membership, administered in Slack rather than in the
+stack. The content exposure is bounded (retrieval reads only the shared vault,
+which any Soilytix employee can already clone), but the reach is broader, and
+that is a product decision rather than an implementation detail.
 
 Verification follows Slack's documented scheme: HMAC-SHA256 over
 `v0:{timestamp}:{raw body}`, compared in constant time, with a five-minute

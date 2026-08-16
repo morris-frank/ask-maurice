@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from ask_maurice.config import ConfigError, IapConfig, RuntimeConfig
+from ask_maurice.config import ConfigError, RuntimeConfig
 
 ENTRA_VARS = {
     "ASK_MAURICE_ENTRA_TENANT_ID": "11111111-2222-3333-4444-555555555555",
     "ASK_MAURICE_ENTRA_AUDIENCE": "api://ask-maurice",
     "ASK_MAURICE_RESOURCE_URL": "https://ask-maurice.example.com",
 }
-# Cloud Run's form: leading slash, project NUMBER, location, service name.
-IAP_AUDIENCE = "/projects/123456789012/locations/europe-west3/services/ask-maurice"
 
 # Low-entropy and unprefixed on purpose: a realistic `xoxb-…` here trips the
 # secret scanner, and the values are never parsed, only carried.
@@ -24,7 +22,6 @@ SLACK_VARS = {
 ALL_VARS = [
     *ENTRA_VARS,
     *SLACK_VARS,
-    "ASK_MAURICE_IAP_AUDIENCE",
     "ASK_MAURICE_ENV",
     "ASK_MAURICE_BUNDLE_SOURCE",
     # `RuntimeConfig.from_env` also builds the mixedbread config, which raises on a
@@ -45,41 +42,31 @@ def clean_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ASK_MAURICE_ENV", "production")
 
 
-def test_production_accepts_iap_alone(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("ASK_MAURICE_IAP_AUDIENCE", IAP_AUDIENCE)
+def test_production_accepts_slack_alone(monkeypatch: pytest.MonkeyPatch):
+    """The v1 surface: Slack in front, no bearer-token edge at all."""
+    for name, value in SLACK_VARS.items():
+        monkeypatch.setenv(name, value)
     config = RuntimeConfig.from_env()
     assert config.entra is None
-    assert config.iap == IapConfig(audience=IAP_AUDIENCE)
+    assert config.slack is not None
     assert config.has_access_edge
 
 
-def test_production_still_accepts_entra_alone(monkeypatch: pytest.MonkeyPatch):
+def test_production_accepts_entra_alone(monkeypatch: pytest.MonkeyPatch):
     for name, value in ENTRA_VARS.items():
         monkeypatch.setenv(name, value)
     config = RuntimeConfig.from_env()
-    assert config.iap is None
+    assert config.slack is None
     assert config.entra is not None
     assert config.has_access_edge
 
 
 def test_production_accepts_both_edges(monkeypatch: pytest.MonkeyPatch):
-    for name, value in ENTRA_VARS.items():
+    for name, value in {**ENTRA_VARS, **SLACK_VARS}.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setenv("ASK_MAURICE_IAP_AUDIENCE", IAP_AUDIENCE)
     config = RuntimeConfig.from_env()
     assert config.entra is not None
-    assert config.iap is not None
-
-
-def test_production_accepts_slack_alone(monkeypatch: pytest.MonkeyPatch):
-    """The v1 surface: Slack in front, no browser edge at all."""
-    for name, value in SLACK_VARS.items():
-        monkeypatch.setenv(name, value)
-    config = RuntimeConfig.from_env()
-    assert config.entra is None
-    assert config.iap is None
     assert config.slack is not None
-    assert config.has_access_edge
 
 
 def test_a_signing_secret_without_a_bot_token_is_no_edge(monkeypatch: pytest.MonkeyPatch):
@@ -98,13 +85,28 @@ def test_a_bot_token_without_a_signing_secret_is_no_edge(monkeypatch: pytest.Mon
         RuntimeConfig.from_env()
 
 
-def test_production_refuses_with_no_edge_and_names_all_three(monkeypatch: pytest.MonkeyPatch):
+def test_production_refuses_with_no_edge_and_names_both(monkeypatch: pytest.MonkeyPatch):
     with pytest.raises(ConfigError) as caught:
         RuntimeConfig.from_env()
     message = str(caught.value)
-    assert "ASK_MAURICE_ENTRA_TENANT_ID" in message
-    assert "ASK_MAURICE_IAP_AUDIENCE" in message
     assert "ASK_MAURICE_SLACK_SIGNING_SECRET" in message
+    assert "ASK_MAURICE_ENTRA_TENANT_ID" in message
+
+
+def test_the_guard_no_longer_offers_iap(monkeypatch: pytest.MonkeyPatch):
+    """IAP is gone. A stale `ASK_MAURICE_IAP_AUDIENCE` must not read as an edge.
+
+    The variable being ignored is the point: an operator who carried it over from
+    the previous deploy gets the boot refusal, not a service that looks configured
+    and answers everyone anonymously.
+    """
+    monkeypatch.setenv(
+        "ASK_MAURICE_IAP_AUDIENCE",
+        "/projects/123456789012/locations/europe-west3/services/ask-maurice",
+    )
+    with pytest.raises(ConfigError) as caught:
+        RuntimeConfig.from_env()
+    assert "IAP" not in str(caught.value)
 
 
 def test_development_still_runs_with_no_edge_at_all(monkeypatch: pytest.MonkeyPatch):
@@ -120,9 +122,3 @@ def test_a_partial_entra_config_is_no_edge(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ASK_MAURICE_ENTRA_AUDIENCE", ENTRA_VARS["ASK_MAURICE_ENTRA_AUDIENCE"])
     with pytest.raises(ConfigError):
         RuntimeConfig.from_env()
-
-
-def test_iap_endpoints_are_googles_and_not_configurable():
-    iap = IapConfig(audience=IAP_AUDIENCE)
-    assert iap.issuer == "https://cloud.google.com/iap"
-    assert iap.jwks_uri == "https://www.gstatic.com/iap/verify/public_key-jwk"
