@@ -1,0 +1,46 @@
+# Keep the build context small and, more importantly, keep two things out of it
+# entirely: the persona bundle (a sensitive asset — Secret Manager only, see
+# AGENTS.md § Sensitivity boundary) and the 2.7 GB corpus checkout, which the
+# image replaces with the baked subset under dist/.
+#
+# Patterns are anchored at the context root, so `corpus` excludes ./corpus and
+# NOT ./dist/corpus — which is exactly the directory the Dockerfile copies.
+
+# --- the sensitive asset ---------------------------------------------------
+persona
+persona-bundle*.json
+
+# --- the corpus checkout (dist/corpus is baked from it and IS copied) ------
+corpus
+
+# --- secrets ---------------------------------------------------------------
+.env
+.env.local
+
+# --- vcs, tooling, local state ---------------------------------------------
+.git
+.gitignore
+.github
+.venv
+.mise
+.claude
+mise.toml
+mise.lock
+.pre-commit-config.yaml
+.gitleaks.toml
+.editorconfig
+
+# --- not needed at runtime -------------------------------------------------
+tests
+scripts
+Dockerfile
+.dockerignore
+
+# --- caches and build droppings --------------------------------------------
+**/__pycache__
+**/*.py[cod]
+.ruff_cache
+.pytest_cache
+.ty_cache
+**/*.egg-info
+.DS_Store

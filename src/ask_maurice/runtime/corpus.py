@@ -33,6 +33,11 @@ SKIP_DIRS = {".git", ".obsidian", ".bin", "templates"}
 # 2026-07-30. Shared, but never a deliberate share decision — opt in explicitly.
 TRANSCRIPTS_DIR = "transcripts"
 
+# Provenance for a corpus with no `.git`. The container image bakes only the 564
+# markdown files retrieval actually reads (22.6 MB) rather than the 2.7 GB
+# checkout they live in, so the commit has to travel beside them in a plain file.
+COMMIT_FILE = "COMMIT"
+
 # Standard BM25 constants: term-frequency saturation and length normalisation.
 _K1, _B = 1.2, 0.75
 
@@ -86,11 +91,33 @@ class Corpus:
 
     @property
     def commit(self) -> str:
-        return _git("rev-parse", "HEAD", cwd=self.root)
+        """The SHA every `Excerpt.cite()` hangs off. Never guessed, never blank."""
+        if (self.root / ".git").exists():
+            return _git("rev-parse", "HEAD", cwd=self.root)
+        if baked := self._baked_commit():
+            return baked
+        raise CorpusError(self._no_provenance())
+
+    def _baked_commit(self) -> str:
+        path = self.root / COMMIT_FILE
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return ""
+
+    def _no_provenance(self) -> str:
+        return (
+            f"{self.root} has no provenance: neither a .git checkout nor a non-empty "
+            f"{COMMIT_FILE} file. Run `ask-maurice corpus-sync` for a local clone, or "
+            "`ask-maurice bake-corpus` to produce the baked corpus an image ships."
+        )
 
     def documents(self) -> list[Path]:
-        if not (self.root / ".git").exists():
-            raise CorpusError(f"{self.root} is not a git checkout — run `ask-maurice corpus-sync`")
+        # A baked corpus has no `.git`, and that is fine — but *some* provenance is
+        # mandatory. Serving answers whose citations point at an unknown commit is
+        # worse than serving none, so refuse rather than degrade.
+        if not (self.root / ".git").exists() and not self._baked_commit():
+            raise CorpusError(self._no_provenance())
         out = []
         for path in sorted(self.root.rglob("*.md")):
             parts = path.relative_to(self.root).parts

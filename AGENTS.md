@@ -51,9 +51,15 @@ Three rules follow, and none of them are negotiable:
 
 ```
 src/ask_maurice/
-  cli.py              Typer app: build-persona, publish-persona, corpus-sync, ask, serve
+  cli.py              Typer app: build-persona, publish-persona, corpus-sync, bake-corpus,
+                      ask, serve
   config.py           BuildConfig (private vault) and RuntimeConfig (shared only) — the
-                      split is load-bearing; RuntimeConfig has no private-vault field
+                      split is load-bearing; RuntimeConfig has no private-vault field.
+                      EntraConfig and IapConfig are the two access edges; production
+                      requires at least one
+  bake.py             neither plane: ./corpus -> dist/corpus for the image. Calls the
+                      runtime's Corpus.documents() so the baked set cannot drift from
+                      the retrievable set; writes HEAD to a COMMIT file beside them
   persona.py          PersonaBundle / Participant: the data model both planes share.
                       Pure data, so runtime never imports anything from build/
   build/
@@ -67,17 +73,24 @@ src/ask_maurice/
     identity.py         Entra claims / Slack user ID -> email -> Participant, via the
                         alias table baked into the bundle. Opens no vault file.
     framing.py          participant record -> the per-caller framing block
-    corpus.py           shared-vault clone, sync, and lexical retrieval with provenance
+    corpus.py           shared-vault clone, sync, and lexical retrieval with provenance.
+                        Provenance is .git in dev or a COMMIT file in a baked image;
+                        neither one present is a hard error, never a silent answer
     artifacts.py        classify a question -> document | podcast | explainer-video | none
     literature.py       STUB: kb-mcp science lookup, deferred out of v1
     prompt.py           cached persona in system[], per-caller framing in messages[]
     agent.py            the anthropic call on claude-opus-5
     redaction.py        scrub bundle-derived text from logs and answers; refusal text
-    server.py           FastAPI app + Entra token verification + RFC 9728 metadata
+    server.py           FastAPI app, RFC 9728 metadata, and both access edges:
+                        verify() for Entra bearer tokens (RS256, tenant JWKS) and
+                        verify_iap() for IAP assertions (ES256, Google's JWK set).
+                        resolve_caller() is the order: bearer -> IAP -> anonymous
 scripts/
   no_persona_bundle.py  pre-commit guard: refuses a compiled bundle by path or content
 tests/                pure logic only, plus test_boundary.py — which fails if any module
                       under runtime/ imports the build plane or names the private vault
+Dockerfile            Cloud Run image: uv sync --frozen --no-dev, non-root, port 8080,
+                      COPY dist/corpus (never corpus/), and no persona bundle at all
 ```
 
 ## Divergences from `doppel-maurice` worth knowing

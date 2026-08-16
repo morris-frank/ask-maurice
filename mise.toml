@@ -84,6 +84,10 @@ run = "mise exec -- gitleaks dir . --redact --verbose"
 description = "BUILD PLANE (private machine only): compile the persona bundle from the private vault"
 run = "mise exec -- uv run ask-maurice build-persona"
 
+[tasks.bake-corpus]
+description = "IMAGE BUILD: copy the retrievable subset of ./corpus into dist/corpus"
+run = "mise exec -- uv run ask-maurice bake-corpus"
+
 [tasks.serve]
 description = "RUNTIME PLANE: serve the agent locally against a local bundle + team-vault clone"
 run = "mise exec -- uv run ask-maurice serve"
