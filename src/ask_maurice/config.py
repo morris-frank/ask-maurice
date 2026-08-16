@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Literal
 
 BundleSource = Literal["file", "secret"]
+VaultRetrieval = Literal["local", "mixedbread", "hybrid"]
 
 
 class ConfigError(RuntimeError):
@@ -86,6 +87,72 @@ class EntraConfig:
         if not (tenant_id and audience and resource_url):
             return None
         return cls(tenant_id=tenant_id, audience=audience, resource_url=resource_url)
+
+
+@dataclass(frozen=True)
+class MixedbreadConfig:
+    """Mixedbread stores: the science literature, and optionally the shared vault.
+
+    Two stores, deliberately separate, because they are different kinds of claim.
+    The literature store holds third-party papers — evidence Maurice did not
+    produce and must attribute. The vault store, when it exists, holds the same
+    shared-vault markdown the local BM25 corpus already reads, just indexed
+    semantically; it is Maurice's own writing either way.
+
+    Nothing here can point at private content. The vault store is populated by
+    `ask-maurice vault-index`, which reads the shared-vault checkout and nothing
+    else, and the persona bundle is never a store input at all.
+    """
+
+    api_key: str
+    literature_store: str
+    vault_store: str
+    vault_retrieval: VaultRetrieval
+
+    @property
+    def literature_enabled(self) -> bool:
+        return bool(self.literature_store)
+
+    @property
+    def vault_store_enabled(self) -> bool:
+        return self.vault_retrieval != "local"
+
+    @classmethod
+    def from_env(cls) -> MixedbreadConfig | None:
+        """None when no key is set — the whole integration is then simply off.
+
+        A misconfiguration (a store named without a key, semantic retrieval asked
+        for without a store) is an error rather than a silent downgrade: a
+        literature path that quietly returns nothing is exactly the failure mode
+        `literature.py` was left a stub to avoid.
+        """
+        retrieval = _optional("ASK_MAURICE_VAULT_RETRIEVAL", "local")
+        if retrieval not in ("local", "mixedbread", "hybrid"):
+            raise ConfigError(
+                "ASK_MAURICE_VAULT_RETRIEVAL must be 'local', 'mixedbread' or 'hybrid', "
+                f"got {retrieval!r}"
+            )
+        literature_store = _optional("ASK_MAURICE_LITERATURE_STORE")
+        vault_store = _optional("ASK_MAURICE_VAULT_STORE")
+        api_key = _optional("MXBAI_API_KEY")
+        if not api_key:
+            if literature_store or vault_store or retrieval != "local":
+                raise ConfigError(
+                    "MXBAI_API_KEY is not set, but a mixedbread store or retrieval mode is "
+                    "configured (see .env.example)"
+                )
+            return None
+        if retrieval != "local" and not vault_store:
+            raise ConfigError(
+                f"ASK_MAURICE_VAULT_RETRIEVAL={retrieval} needs ASK_MAURICE_VAULT_STORE — "
+                "index the shared vault with `ask-maurice vault-index` first"
+            )
+        return cls(
+            api_key=api_key,
+            literature_store=literature_store,
+            vault_store=vault_store,
+            vault_retrieval=retrieval,
+        )
 
 
 @dataclass(frozen=True)
@@ -170,6 +237,7 @@ class RuntimeConfig:
     entra: EntraConfig | None
     iap: IapConfig | None
     slack: SlackConfig | None
+    mixedbread: MixedbreadConfig | None
     production: bool
 
     @property
@@ -214,5 +282,6 @@ class RuntimeConfig:
             entra=entra,
             iap=iap,
             slack=slack,
+            mixedbread=MixedbreadConfig.from_env(),
             production=production,
         )

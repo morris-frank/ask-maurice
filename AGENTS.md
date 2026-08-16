@@ -11,7 +11,7 @@ This repo straddles a boundary that already exists in the vault: `origin`
 graduated subset). `.kbignore` in the vault names what never crosses, and
 `.bin/kb` is the only tool that moves content across it.
 
-Three rules follow, and none of them are negotiable:
+Four rules follow, and none of them are negotiable:
 
 1. **The runtime never touches the private vault.** Retrieval reads `corpus/`,
    a clone of the team remote, and nothing else. No code path in `runtime/`
@@ -25,6 +25,13 @@ Three rules follow, and none of them are negotiable:
 3. **If content looks like it is crossing the boundary, stop and ask.** Do not
    copy, summarise or redact private content into a tracked path to make it
    fit. That is the vault's own `AGENTS.md` rule and it applies here verbatim.
+4. **Shared-inside-Soilytix is not the same as uploadable.** `vault-index` sends
+   the team-vault checkout to mixedbread, a third party. That content is already
+   readable by everyone on the team, which is what makes it *possible*; it is
+   not what makes it *decided*. The command asks before it uploads, nothing runs
+   it on a schedule, and `ASK_MAURICE_VAULT_RETRIEVAL` stays `local` until
+   someone makes the call on purpose. The persona bundle is not in scope for
+   this and never will be — no store, no index, no exception.
 
 ## Golden rules
 
@@ -32,8 +39,10 @@ Three rules follow, and none of them are negotiable:
    prek are pinned in `mise.toml` and locked in `mise.lock`.
 2. **Invoke pinned tools via `mise exec --` or a `mise run` task**, never a bare
    tool name — guards against a stray same-named binary earlier on PATH.
-3. **`persona/` and `corpus/` are gitignored** and never leave the machine that
-   produced them. `persona/` additionally has a pre-commit hook refusing it.
+3. **`persona/` and `corpus/` are gitignored.** `persona/` never leaves the
+   machine that produced it, and has a pre-commit hook refusing it. `corpus/`
+   leaves only via `vault-index`, only to the configured mixedbread store, and
+   only after the confirmation prompt — see boundary rule 4.
 4. **New Python deps land via `uv add` / `uv add --group dev`**, never a
    hand-edited `pyproject.toml`/`uv.lock`.
 5. **Model calls go through the official `anthropic` SDK**, never raw HTTP.
@@ -45,14 +54,22 @@ Three rules follow, and none of them are negotiable:
    the frozen bundle lives in `system` with `cache_control`, and the framing for
    this caller is a mid-conversation system message inside `messages[]`. Putting
    framing in `system` would invalidate the shared cache on every caller.
-7. **`mise run check` is the definition of done.**
+7. **Only `runtime/retrieval.py` may send content to a third-party store**, and
+   only what `Corpus.documents()` yields — the shared-vault checkout, minus
+   templates, minus transcripts unless opted in. A test fails if any other
+   runtime module grows an upload path, and another fails if the uploader gains
+   an import that can see the persona bundle.
+8. **A retrieval outage is never an empty result.** `mxbai.StoreUnavailable`
+   exists so the agent can say "I could not check" instead of answering as if
+   the literature agreed with it. Do not catch it into a `[]`.
+9. **`mise run check` is the definition of done.**
 
 ## Layout
 
 ```
 src/ask_maurice/
   cli.py              Typer app: build-persona, publish-persona, corpus-sync, bake-corpus,
-                      ask, serve
+                      vault-index, ask, serve
   config.py           BuildConfig (private vault) and RuntimeConfig (shared only) — the
                       split is load-bearing; RuntimeConfig has no private-vault field.
                       EntraConfig, IapConfig and SlackConfig are the three access
@@ -80,10 +97,19 @@ src/ask_maurice/
     corpus.py           shared-vault clone, sync, and lexical retrieval with provenance.
                         Provenance is .git in dev or a COMMIT file in a baked image;
                         neither one present is a hard error, never a silent answer
+    mxbai.py            the mixedbread client, one search call, one error type. The
+                        only place an outage is turned into something other than
+                        an empty result
+    retrieval.py        where vault excerpts come from: BM25, the mixedbread vault
+                        store, or both fused by rank — plus the indexer that puts
+                        the shared-vault checkout there. The ONLY module that
+                        sends content to a third-party store
+    literature.py       the mixedbread papers store: third-party evidence, cited
+                        rather than asserted. Reached through a tool, not folded
+                        into every request
     artifacts.py        classify a question -> document | podcast | explainer-video | none
-    literature.py       STUB: kb-mcp science lookup, deferred out of v1
     prompt.py           cached persona in system[], per-caller framing in messages[]
-    agent.py            the anthropic call on claude-opus-5
+    agent.py            the anthropic call on claude-opus-5, and the literature tool loop
     redaction.py        scrub bundle-derived text from logs and answers; refusal text
     server.py           FastAPI app, RFC 9728 metadata, and all three access edges:
                         verify() for Entra bearer tokens (RS256, tenant JWKS) and
@@ -98,6 +124,9 @@ tests/                pure logic only, plus test_boundary.py — which fails if 
                       under runtime/ imports the build plane or names the private vault
 Dockerfile            Cloud Run image: uv sync --frozen --no-dev, non-root, port 8080,
                       COPY dist/corpus (never corpus/), and no persona bundle at all
+RUNBOOK.md            the operator sequence, first deploy to first answer. Keep it in
+                      step with the CLI and the Dockerfile — a stale runbook is how a
+                      boot guard gets read as an outage
 ```
 
 ## Divergences from `doppel-maurice` worth knowing

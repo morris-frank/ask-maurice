@@ -43,6 +43,7 @@ _BASE = RuntimeConfig(
     entra=None,
     iap=None,
     slack=None,
+    mixedbread=None,
     production=False,
 )
 

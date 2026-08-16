@@ -99,6 +99,68 @@ def corpus_sync() -> None:
         console.print("  [dim]transcripts/ excluded (ASK_MAURICE_INCLUDE_TRANSCRIPTS)[/dim]")
 
 
+@app.command("vault-index")
+def vault_index(
+    yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="list what would be sent, send nothing"),
+    prune: bool = typer.Option(True, help="delete indexed files no longer in the vault"),
+) -> None:
+    """RUNTIME PLANE: index the shared-vault checkout into the mixedbread store.
+
+    Reads `corpus/` and nothing else, so what leaves the machine is the same
+    content any Soilytix employee can already clone — but it does leave the
+    machine, which is why this asks first and is never part of `corpus-sync`.
+    Re-run it after every sync; unchanged files are skipped by content hash.
+    """
+    from ask_maurice.runtime import retrieval
+    from ask_maurice.runtime.corpus import Corpus, CorpusError
+    from ask_maurice.runtime.mxbai import StoreUnavailable, client
+
+    try:
+        config = RuntimeConfig.from_env()
+    except ConfigError as exc:
+        _fail(str(exc))
+        return
+    if config.mixedbread is None or not config.mixedbread.vault_store:
+        _fail("ASK_MAURICE_VAULT_STORE (and MXBAI_API_KEY) must be set to index the vault")
+        return
+
+    corpus = Corpus(root=config.corpus_path, include_transcripts=config.include_transcripts)
+    try:
+        documents = corpus.documents()
+        head = corpus.commit
+    except CorpusError as exc:
+        _fail(str(exc))
+        return
+
+    store = config.mixedbread.vault_store
+    console.print(f"{len(documents)} notes from {config.corpus_path} @ {head[:8]} -> {store}")
+    if dry_run:
+        for path in documents:
+            console.print(f"  [dim]{path.relative_to(corpus.root).as_posix()}[/dim]")
+        return
+    if not yes and not typer.confirm(f"upload shared-vault notes to mixedbread store {store!r}?"):
+        raise typer.Abort
+
+    try:
+        report = retrieval.index(
+            corpus,
+            client(config.mixedbread.api_key),
+            store,
+            prune=prune,
+            on_file=lambda rel: console.print(f"  [dim]{rel}[/dim]"),
+        )
+    except StoreUnavailable as exc:
+        _fail(str(exc))
+        return
+
+    console.print(
+        f"[green]indexed[/green] {report.total} notes @ {report.commit[:8]} "
+        f"({len(report.uploaded)} uploaded, {len(report.unchanged)} unchanged, "
+        f"{len(report.removed)} removed)"
+    )
+
+
 @app.command("bake-corpus")
 def bake_corpus(
     out: Path = typer.Option(  # noqa: B008 - Typer reads the default as the option spec
@@ -132,7 +194,8 @@ def ask(
 ) -> None:
     """RUNTIME PLANE: one question from the terminal."""
     from ask_maurice.runtime import bundle as bundle_mod
-    from ask_maurice.runtime import redaction
+    from ask_maurice.runtime import literature as literature_mod
+    from ask_maurice.runtime import redaction, retrieval
     from ask_maurice.runtime.agent import Agent, AgentError
     from ask_maurice.runtime.corpus import Corpus, CorpusError
     from ask_maurice.runtime.identity import Caller, from_handle
@@ -146,12 +209,14 @@ def ask(
 
     redaction.install(redaction.Redactor(persona))
     corpus = Corpus(root=config.corpus_path, include_transcripts=config.include_transcripts)
+    literature = literature_mod.from_config(config.mixedbread)
     caller = from_handle(as_handle, persona) if as_handle else Caller(handle="anonymous")
     if as_handle and not caller.known:
         err.print(f"[yellow]note[/yellow] {as_handle} is not in the bundle — answering unframed")
 
     try:
-        answer = Agent.build(persona, corpus).answer(question, caller)
+        agent = Agent.build(persona, retrieval.for_config(config.mixedbread, corpus), literature)
+        answer = agent.answer(question, caller)
     except (AgentError, CorpusError) as exc:
         _fail(str(exc))
         return
@@ -159,6 +224,8 @@ def ask(
     console.print(Markdown(answer.text))
     if answer.sources:
         console.print(f"\n[dim]sources: {', '.join(answer.sources)}[/dim]")
+    if answer.references:
+        console.print(f"[dim]literature: {', '.join(answer.references)}[/dim]")
     if answer.suggestion.kind.value != "none":
         availability = "" if answer.suggestion.available else " (not wired up yet)"
         console.print(

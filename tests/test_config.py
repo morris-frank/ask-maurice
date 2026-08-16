@@ -27,6 +27,14 @@ ALL_VARS = [
     "ASK_MAURICE_IAP_AUDIENCE",
     "ASK_MAURICE_ENV",
     "ASK_MAURICE_BUNDLE_SOURCE",
+    # `RuntimeConfig.from_env` also builds the mixedbread config, which raises on a
+    # half-configured store. Cleared so these tests fail on the access-edge guard
+    # and never on whatever retrieval variables the machine happens to carry —
+    # see test_config_mixedbread.py for that half.
+    "MXBAI_API_KEY",
+    "ASK_MAURICE_LITERATURE_STORE",
+    "ASK_MAURICE_VAULT_STORE",
+    "ASK_MAURICE_VAULT_RETRIEVAL",
 ]
 
 

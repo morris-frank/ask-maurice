@@ -73,7 +73,9 @@ def _agent(bundle: PersonaBundle, corpus: Path, response: _Response) -> tuple[Ag
     client = _Client(response)
     agent = Agent(
         bundle=bundle,
-        corpus=Corpus(corpus),
+        # `Corpus` satisfies the `Retriever` protocol, so the lexical path is what
+        # these tests exercise — no mixedbread, no literature tool.
+        retriever=Corpus(corpus),
         client=client,  # ty: ignore[invalid-argument-type] - structural stand-in
         redactor=Redactor(bundle),
     )
