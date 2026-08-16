@@ -13,26 +13,32 @@ Two things shape the sequence and neither is negotiable:
   serving unframed or source-less answers. That is why the secret and the Slack
   app come *before* the deploy, not after.
 
-## Pick the shape before you start
+## The shape this deploys
 
-The three access edges are independent in the code, but IAP is not. Google's IAP
-sits in front of the **whole** Cloud Run service, so it will also intercept
-`/slack/command` — and Slack cannot sign in. Today that makes the two shapes
-practically exclusive:
+Slack in front, `--allow-unauthenticated` at the Cloud Run layer, and the app
+enforcing the edge behind that:
 
-| shape | edge | who reaches it | Cloud Run ingress |
-|---|---|---|---|
-| **A — Slack (the v1 surface)** | `ASK_MAURICE_SLACK_*` | the team, via a slash command | `--allow-unauthenticated` |
-| **B — browser / MCP** | IAP and/or Entra | named principals in an IAM binding | IAP on, unauthenticated off |
+| route | who gets through | how |
+|---|---|---|
+| `/slack/command` | the team | HMAC-SHA256 signature, five-minute replay window |
+| `/ask` | nobody | 401 — it answers only when no edge is configured at all, i.e. a local `serve` |
+| `/healthz` | anyone | it returns a status and the persona commit, nothing else |
 
-Shape A is what the rest of this runbook deploys. `--allow-unauthenticated` is
-safe there because the app enforces its own edge: `/slack/command` requires a
-valid Slack signature, and `/ask` returns 401 to anyone without a bearer token
-or an IAP assertion, because an access edge *is* configured.
+`--allow-unauthenticated` is not a gap here: Slack has to reach the service from
+the public internet, and the slash command's signature is the real gate. Nothing
+else on the service answers a stranger.
 
-Wanting both at once means a load balancer with a URL map splitting
-`/slack/command` onto an IAP-free backend. Nobody has built that. **Unresolved —
-decide before promising the team both surfaces.**
+**The slash command is the only way in.** The Entra bearer and Google IAP edges
+both existed and both were removed — IAP because it fronts the whole service and
+would intercept `/slack/command`, Entra because nothing on this surface used it.
+See README § Why there is only one edge. Two consequences for you as operator:
+
+- There is no browser or script access to `/ask`. Do not plan a scheduled job or
+  an MCP client against this deployment until an edge exists for it.
+- There is nothing to configure here. No audiences, no tenant ids, no JWKS. If a
+  previous deploy set `ASK_MAURICE_ENTRA_*` or `ASK_MAURICE_IAP_AUDIENCE`, delete
+  them — they are read by nothing, and leaving them makes the console look like
+  auth is configured when it is not.
 
 Steps 6–8 belong in the terraform repo long-term (alongside `stacks/dev/kb-mcp`,
 per `docs/runbooks/host-internal-app.md`). What follows is the manual equivalent
@@ -44,7 +50,7 @@ for the first deploy, and it is what the stack should end up expressing.
 
 | value | where it comes from |
 |---|---|
-| GCP project id **and project number** | `gcloud projects describe PROJECT_ID` — the number, not the id, is what IAP audiences use |
+| GCP project id **and project number** | `gcloud projects describe PROJECT_ID` — the bundle secret's resource name uses the number, not the id |
 | Anthropic API key | console.anthropic.com |
 | Read access to `Soilytix/vault` | your own GitHub SSH key; the clone is a plain `git clone` |
 | Private vault on disk | `morris-frank/vault`, cloned locally |
@@ -52,9 +58,9 @@ for the first deploy, and it is what the stack should end up expressing.
 | mixedbread papers store name *(optional)* | the research collection; create it in the mixedbread dashboard first, this code does not create stores |
 | Slack workspace admin | to create the app in step 5 |
 
-Nothing here is a placeholder you can guess later. A wrong project *number* in an
-IAP audience is a 401 on every request; an absent store name with a key set is a
-config that refuses to load, on purpose.
+Nothing here is a placeholder you can guess later. A wrong project *number* in the
+bundle secret's resource name is a container that cannot boot; an absent store
+name with a key set is a config that refuses to load, on purpose.
 
 ---
 
@@ -129,8 +135,8 @@ mise exec -- uv run ask-maurice publish-persona         # -> Secret Manager, ask
 ```
 
 `build-persona` warns about any participant it could not join to an email. Those
-people get *no framing* over Slack or Entra — fix their person file's aliases and
-rebuild rather than shipping the gap.
+people get *no framing* when they use the slash command — fix their person file's
+aliases and rebuild rather than shipping the gap.
 
 The file it writes is a sensitive asset: gitignored, mode 0600, a pre-commit hook
 refuses it, and the Dockerfile has a `RUN` check asserting it never reaches a
@@ -166,8 +172,9 @@ a model problem for as long as it takes someone to check.
 
 ## 5. Create the Slack app (Slack admin, before the deploy)
 
-Both Slack values must exist before the deploy, because a signing secret without
-a bot token is not an access edge and the config rejects it. In
+Both Slack values must exist before the deploy. A signing secret without a bot
+token is not an access edge and the config rejects it, and with no other edge
+left there is nothing for the service to fall back to — it will not boot. In
 api.slack.com/apps → **Create New App** → *From scratch*:
 
 1. **Basic Information → Signing Secret** → this is `ASK_MAURICE_SLACK_SIGNING_SECRET`.
@@ -295,8 +302,11 @@ failure this section exists to prevent.
 - **`ASK_MAURICE_INCLUDE_TRANSCRIPTS`.** 66 transcript files predate
   `transcripts/` entering `.kbignore`. They are shared, but they are pre-rule
   residue rather than a deliberate include.
-- **IAP / Entra alongside Slack.** See the shape table at the top. Turning IAP on
-  in front of this service takes the Slack edge down with it.
+- **Any authenticated HTTP surface at all.** `/ask` authenticates nobody now that
+  both bearer edges are gone. Bringing one back is a deliberate piece of work —
+  an Entra verifier again (config, JWKS, the RFC 9728 route, PyJWT), or a load
+  balancer with a URL map routing `/slack/command` to an IAP-free backend. Decide
+  it when something actually needs to ask over HTTP, not before.
 
 ## Keeping it running
 

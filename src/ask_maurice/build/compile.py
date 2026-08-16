@@ -144,8 +144,8 @@ def unjoined(bundle: PersonaBundle) -> list[str]:
     """Participants with no email alias — i.e. the dict-key -> person join failed.
 
     Worth surfacing rather than swallowing: an unjoined participant still gets
-    framing when addressed by name, but never when they ask over Slack or Entra,
-    because those channels only ever produce an address.
+    framing when addressed by name, but never when they ask over Slack, because
+    that channel only ever produces an address.
     """
     joined = {slug for handle, slug in bundle.aliases.items() if "@" in handle}
     return sorted(p.display_name for slug, p in bundle.participants.items() if slug not in joined)

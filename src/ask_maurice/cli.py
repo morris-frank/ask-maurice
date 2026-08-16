@@ -45,7 +45,7 @@ def build_persona() -> None:
     if missing := unjoined(bundle):
         err.print(
             f"[yellow]warning[/yellow] no email found for {', '.join(missing)} — they will get "
-            "no framing when asking over Slack or Entra. Check their person file's aliases."
+            "no framing when asking over Slack. Check their person file's aliases."
         )
     console.print(
         "\n[yellow]This file is a sensitive asset.[/yellow] It is gitignored and mode 0600. "
@@ -250,8 +250,8 @@ def serve(
         return
     if not config.has_access_edge:
         err.print(
-            "[yellow]warning[/yellow] no access edge configured (Entra bearer or IAP) — "
-            "every caller is anonymous and every answer unframed"
+            "[yellow]warning[/yellow] no access edge configured (Slack) — every caller is "
+            "anonymous and every answer unframed; use `--as` on /ask to get framing back"
         )
     # log_config=None keeps uvicorn from replacing the root logger's handlers,
     # which is where the redaction filter lives.
