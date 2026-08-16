@@ -89,6 +89,44 @@ class EntraConfig:
 
 
 @dataclass(frozen=True)
+class IapConfig:
+    """The other access edge: Google IAP in front of Cloud Run.
+
+    Behind IAP the caller never presents a bearer token to us — Google's edge
+    authenticates them and forwards a signed assertion. Verified against Google's
+    own keys, so unlike `EntraConfig` there is nothing tenant-shaped to configure;
+    the audience alone pins the token to this exact service.
+
+    That audience string is not free-form. For a Cloud Run service IAP mints it
+    as `/projects/PROJECT_NUMBER/locations/REGION/services/SERVICE_NAME` — note
+    the leading slash, the *number* rather than the project ID, and that it
+    differs from the load-balancer form (`/projects/N/global/backendServices/ID`)
+    and the App Engine form (`/projects/N/apps/PROJECT_ID`). A mismatch here is
+    a 401 on every request, so it is taken verbatim from the environment and
+    never assembled from parts.
+    """
+
+    audience: str
+
+    # Fixed by Google, not by our deployment — hence constants rather than config.
+    ISSUER = "https://cloud.google.com/iap"
+    JWKS_URI = "https://www.gstatic.com/iap/verify/public_key-jwk"
+
+    @property
+    def issuer(self) -> str:
+        return self.ISSUER
+
+    @property
+    def jwks_uri(self) -> str:
+        return self.JWKS_URI
+
+    @classmethod
+    def from_env(cls) -> IapConfig | None:
+        audience = _optional("ASK_MAURICE_IAP_AUDIENCE")
+        return cls(audience=audience) if audience else None
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     """Runtime plane. Hosted. Has no path into the private vault, by design."""
 
@@ -100,7 +138,13 @@ class RuntimeConfig:
     bundle_path: Path
     bundle_secret: str
     entra: EntraConfig | None
+    iap: IapConfig | None
     production: bool
+
+    @property
+    def has_access_edge(self) -> bool:
+        """True when some verified identity can reach us. Framing depends on it."""
+        return self.entra is not None or self.iap is not None
 
     @classmethod
     def from_env(cls) -> RuntimeConfig:
@@ -111,10 +155,17 @@ class RuntimeConfig:
             )
         production = _optional("ASK_MAURICE_ENV", "development") == "production"
         entra = EntraConfig.from_env()
-        if production and entra is None:
+        iap = IapConfig.from_env()
+        # Either edge will do, and both together is the normal deployment: IAP for
+        # a browser caller, a bearer token for an MCP client. Neither means every
+        # caller is anonymous, which in production is both a hole and — because
+        # per-caller framing is the product — a uselessly generic service.
+        if production and entra is None and iap is None:
             raise ConfigError(
-                "refusing to run unauthenticated in production: set "
-                "ASK_MAURICE_ENTRA_TENANT_ID / _AUDIENCE / ASK_MAURICE_RESOURCE_URL"
+                "refusing to run unauthenticated in production: configure at least one "
+                "access edge — Entra bearer tokens (ASK_MAURICE_ENTRA_TENANT_ID + "
+                "ASK_MAURICE_ENTRA_AUDIENCE + ASK_MAURICE_RESOURCE_URL) or IAP "
+                "(ASK_MAURICE_IAP_AUDIENCE)"
             )
         secret = _require("ASK_MAURICE_BUNDLE_SECRET") if source == "secret" else ""
         return cls(
@@ -128,5 +179,6 @@ class RuntimeConfig:
             bundle_path=Path(_optional("ASK_MAURICE_BUNDLE_PATH", "./persona/bundle.json")),
             bundle_secret=secret,
             entra=entra,
+            iap=iap,
             production=production,
         )

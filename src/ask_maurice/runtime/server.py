@@ -1,12 +1,22 @@
-"""HTTP surface. Entra-verified callers; the token is how we know who asked.
+"""HTTP surface. Two access edges; either one is how we know who asked.
 
-Same verification shape as `kb-ingest`: RS256, JWKS from the tenant's discovery
-endpoint, issuer and audience both pinned, `tid` checked against the configured
-tenant so a token from another tenant with a matching audience is rejected.
+**Entra bearer token.** Same verification shape as `kb-ingest`: RS256, JWKS from
+the tenant's discovery endpoint, issuer and audience both pinned, `tid` checked
+against the configured tenant so a token from another tenant with a matching
+audience is rejected. This is the edge an MCP client or a script uses.
+
+**Google IAP assertion.** Deployed on Cloud Run behind IAP, the edge is Google's:
+the caller authenticates there and we receive a signed assertion header. Nothing
+about that verification is shared with the Entra path — different algorithm
+(ES256, not RS256), different keys (Google's static JWK set, not a tenant's
+JWKS), different issuer, different email claim. Hence a separate verifier rather
+than a parameterised one; the two only meet at `Caller`.
 
 Auth is required whenever `ASK_MAURICE_ENV=production` — `RuntimeConfig` refuses
-to construct otherwise, so an unauthenticated production deploy fails at boot
-rather than at the first request.
+to construct without at least one edge, so an unauthenticated production deploy
+fails at boot rather than at the first request. That guard is doing more work
+here than in a typical service: an unidentified caller still gets an answer, but
+an unframed one, and the framing is the product.
 
 Logging: no request body, no answer text, no framing. Only the caller handle and
 whether they resolved. The root logger's handlers carry the redaction filter, so
@@ -22,14 +32,20 @@ import jwt
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ask_maurice.config import EntraConfig, RuntimeConfig
+from ask_maurice.config import EntraConfig, IapConfig, RuntimeConfig
+from ask_maurice.persona import PersonaBundle
 from ask_maurice.runtime import bundle as bundle_mod
 from ask_maurice.runtime import redaction
 from ask_maurice.runtime.agent import Agent, AgentError
 from ask_maurice.runtime.corpus import Corpus
-from ask_maurice.runtime.identity import Caller, from_claims, from_handle
+from ask_maurice.runtime.identity import Caller, from_claims, from_handle, from_iap_claims
 
 log = logging.getLogger(__name__)
+
+# Set by IAP itself and stripped from any inbound request, so its presence is
+# meaningful only because IAP is the only thing that can reach the service.
+# We verify the signature regardless — see the module docstring.
+IAP_HEADER = "x-goog-iap-jwt-assertion"
 
 
 class AskRequest(BaseModel):
@@ -61,6 +77,60 @@ def verify(token: str, config: EntraConfig) -> dict[str, Any]:
     return claims
 
 
+def verify_iap(token: str, config: IapConfig) -> dict[str, Any]:
+    """Verified IAP assertion claims, or raise. Never logs or echoes the token.
+
+    `algorithms=["ES256"]` is a whitelist, not a hint — IAP signs with ES256 and
+    accepting anything else here would let a token signed with a different
+    algorithm against the same key material through.
+    """
+    signing_key = jwt.PyJWKClient(config.jwks_uri).get_signing_key_from_jwt(token)
+    return jwt.decode(
+        token,
+        signing_key.key,
+        algorithms=["ES256"],
+        audience=config.audience,
+        issuer=config.issuer,
+        options={"require": ["exp", "aud", "iss"]},
+    )
+
+
+def resolve_caller(
+    authorization: str, iap_assertion: str, config: RuntimeConfig, persona: PersonaBundle
+) -> Caller:
+    """Verified bearer token -> verified IAP assertion -> anonymous.
+
+    Bearer first because it is the more specific signal: behind IAP *every*
+    request carries an assertion, so an assertion plus a bearer token means a
+    client that deliberately authenticated as itself, and that is the identity
+    to honour.
+
+    Anonymous is the last resort and stays development-only — with an edge
+    configured, a request that satisfies neither is rejected rather than quietly
+    downgraded to an unframed answer.
+    """
+    if config.entra is not None and authorization.lower().startswith("bearer "):
+        try:
+            claims = verify(authorization.split(" ", 1)[1], config.entra)
+        except jwt.PyJWTError as exc:
+            # Reason to the log, never to the caller and never with the token.
+            log.info("bearer token rejected: %s", type(exc).__name__)
+            raise HTTPException(401, "invalid token") from None
+        return from_claims(claims, persona)
+
+    if config.iap is not None and iap_assertion:
+        try:
+            claims = verify_iap(iap_assertion, config.iap)
+        except jwt.PyJWTError as exc:
+            log.info("IAP assertion rejected: %s", type(exc).__name__)
+            raise HTTPException(401, "invalid IAP assertion") from None
+        return from_iap_claims(claims, persona)
+
+    if not config.has_access_edge:
+        return Caller(handle="anonymous")
+    raise HTTPException(401, "bearer token or IAP assertion required")
+
+
 def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     config = config or RuntimeConfig.from_env()
     persona = bundle_mod.load(config)
@@ -71,20 +141,12 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     app = FastAPI(title="ask-maurice", docs_url=None, redoc_url=None)
 
     def caller(request: Request) -> Caller:
-        header = request.headers.get("authorization", "")
-        if not header.lower().startswith("bearer "):
-            if config.entra is None:
-                return Caller(handle="anonymous")
-            raise HTTPException(401, "bearer token required")
-        if config.entra is None:
-            return Caller(handle="anonymous")
-        try:
-            claims = verify(header.split(" ", 1)[1], config.entra)
-        except jwt.PyJWTError as exc:
-            # Reason to the log, never to the caller and never with the token.
-            log.info("token rejected: %s", type(exc).__name__)
-            raise HTTPException(401, "invalid token") from None
-        return from_claims(claims, persona)
+        return resolve_caller(
+            request.headers.get("authorization", ""),
+            request.headers.get(IAP_HEADER, ""),
+            config,
+            persona,
+        )
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

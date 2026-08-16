@@ -7,6 +7,8 @@ plane and touches nothing but the shared-vault clone and a compiled bundle.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
@@ -97,6 +99,32 @@ def corpus_sync() -> None:
         console.print("  [dim]transcripts/ excluded (ASK_MAURICE_INCLUDE_TRANSCRIPTS)[/dim]")
 
 
+@app.command("bake-corpus")
+def bake_corpus(
+    out: Path = typer.Option(  # noqa: B008 - Typer reads the default as the option spec
+        Path("dist/corpus"), "--out", help="directory the image will COPY from"
+    ),
+) -> None:
+    """IMAGE BUILD: copy the retrievable subset of the corpus checkout into `--out`.
+
+    Only the documents `Corpus.documents()` would return, plus a COMMIT file
+    carrying the checkout's HEAD — that pair is a complete corpus as far as the
+    runtime is concerned, and it is ~1% of the checkout's size.
+    """
+    from ask_maurice.bake import BakeError, bake_from
+
+    try:
+        config = RuntimeConfig.from_env()
+        result = bake_from(config.corpus_path, out, include_transcripts=config.include_transcripts)
+    except (ConfigError, BakeError) as exc:
+        _fail(str(exc))
+        return
+
+    console.print(f"[green]baked[/green] {result.out} @ {result.commit[:8]}")
+    console.print(f"  documents: {result.documents}")
+    console.print(f"  size:      {result.bytes_copied / 1_000_000:.1f} MB")
+
+
 @app.command("ask")
 def ask(
     question: str = typer.Argument(..., help="the question"),
@@ -153,8 +181,11 @@ def serve(
     except ConfigError as exc:
         _fail(str(exc))
         return
-    if config.entra is None:
-        err.print("[yellow]warning[/yellow] no Entra config — every caller is anonymous")
+    if not config.has_access_edge:
+        err.print(
+            "[yellow]warning[/yellow] no access edge configured (Entra bearer or IAP) — "
+            "every caller is anonymous and every answer unframed"
+        )
     # log_config=None keeps uvicorn from replacing the root logger's handlers,
     # which is where the redaction filter lives.
     uvicorn.run(create_app(config), host=host, port=port, log_config=None)
