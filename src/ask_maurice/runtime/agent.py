@@ -68,27 +68,6 @@ class Agent:
             effort=effort,
         )
 
-
-def _require_api_key() -> None:
-    """Refuse to build an agent that cannot call the model.
-
-    Without a key the SDK constructs a client quite happily and only fails on the
-    first request — with a plain `TypeError`, which is not an `APIStatusError`
-    and so falls straight past `_call`'s handlers into a 500. The container would
-    boot, pass `/healthz`, and answer its first real question with a stack trace
-    that looks like a model problem rather than a missing deploy variable.
-
-    `create_app` calls `Agent.build` at import-time of the app, before uvicorn
-    binds, so checking here turns that into a container that refuses to start —
-    the same bargain the corpus guard makes in the Dockerfile.
-    """
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        raise AgentError(
-            "ANTHROPIC_API_KEY is not set, so no question can be answered. Set it in "
-            ".env.local for a local run, or wire it into the Cloud Run deployment "
-            "(Secret Manager) alongside ASK_MAURICE_BUNDLE_SECRET."
-        )
-
     def answer(self, question: str, caller: Caller) -> Answer:
         excerpts = self.corpus.search(question)
         suggestion = classify(question, excerpts)
@@ -150,3 +129,24 @@ def _require_api_key() -> None:
             if getattr(block, "type", "") == "text"
         )
         return text.strip(), False
+
+
+def _require_api_key() -> None:
+    """Refuse to build an agent that cannot call the model.
+
+    Without a key the SDK constructs a client quite happily and only fails on the
+    first request — with a plain `TypeError`, which is not an `APIStatusError`
+    and so falls straight past `_call`'s handlers into a 500. The container would
+    boot, pass `/healthz`, and answer its first real question with a stack trace
+    that looks like a model problem rather than a missing deploy variable.
+
+    `create_app` calls `Agent.build` before uvicorn binds, so checking here turns
+    that into a container that refuses to start — the same bargain the corpus
+    guard makes in the Dockerfile.
+    """
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        raise AgentError(
+            "ANTHROPIC_API_KEY is not set, so no question can be answered. Set it in "
+            ".env.local for a local run, or wire it into the Cloud Run deployment "
+            "(Secret Manager) alongside ASK_MAURICE_BUNDLE_SECRET."
+        )
