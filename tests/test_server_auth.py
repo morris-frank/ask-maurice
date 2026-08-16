@@ -42,6 +42,7 @@ _BASE = RuntimeConfig(
     bundle_secret="",
     entra=None,
     iap=None,
+    slack=None,
     production=False,
 )
 

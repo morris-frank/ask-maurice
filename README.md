@@ -81,29 +81,55 @@ ask-maurice ask "why do we normalise by sequencing depth before the benchmark?" 
 Everything else runs off `corpus/` and a bundle — locally from `persona/bundle.json`,
 in production from Secret Manager.
 
-## Who the caller is: two access edges
+## Who the caller is: three access edges
 
-`serve` accepts identity from either edge, and both can be on at once. Which one
-a request used never changes the answer — both end at the same `Caller`, resolved
-through the alias table baked into the persona bundle.
+`serve` accepts identity from any edge, and any combination can be on at once.
+Which one a request used never changes the answer — all three end at the same
+`Caller`, resolved through the alias table baked into the persona bundle.
 
-| edge | header | verification | typical caller |
-|---|---|---|---|
-| **Entra bearer** | `Authorization: Bearer …` | RS256, tenant JWKS, `iss`/`aud`/`tid` pinned | MCP client, script |
-| **Google IAP** | `X-Goog-IAP-JWT-Assertion` | ES256, Google's JWK set, `iss`/`aud` pinned | browser, behind Cloud Run |
+| edge | route | proves | identity from | typical caller |
+|---|---|---|---|---|
+| **Slack signed request** | `/slack/command` | Slack sent it (HMAC-SHA256, 5-min window) | `user_id` in the payload → `users.info` | the team |
+| **Google IAP** | `/ask` | the human signed in (ES256, Google's JWK set) | `email` claim | browser, behind Cloud Run |
+| **Entra bearer** | `/ask` | the human signed in (RS256, tenant JWKS) | `preferred_username`/`email`/`upn` | MCP client, script |
 
-Nothing is shared between the two verifiers — different algorithm, different
-keys, different issuer, different email claim — so they are separate functions
-rather than one parameterised one.
+Nothing is shared between the verifiers — different algorithms, different keys,
+different issuers, different claims — so they are separate functions rather than
+one parameterised one.
 
-Resolution order for a request is **verified bearer → verified IAP assertion →
+On `/ask` the resolution order is **verified bearer → verified IAP assertion →
 anonymous**. Bearer wins because behind IAP *every* request carries an assertion,
 so a bearer token on top of one is a deliberate act. Anonymous is development
-only: with either edge configured a request that satisfies neither gets a 401,
-and `RuntimeConfig.from_env` refuses to boot in production unless at least one is
+only: with any edge configured a request that satisfies none gets a 401, and
+`RuntimeConfig.from_env` refuses to boot in production unless at least one is
 configured. That guard matters more here than in a typical service — an
 unidentified caller still gets an answer, but an unframed one, and the framing is
 the product.
+
+### Slack is a different shape of trust, deliberately
+
+Worth stating plainly rather than letting the word "auth" cover both cases. Entra
+and IAP hand us a per-request assertion, signed by an identity provider, naming
+the human who signed in. Slack hands us one shared secret proving *Slack* sent
+the request, plus a `user_id` in the body that we take on Slack's word.
+Transport authentication and caller identity come apart.
+
+Two things bound the identity risk: Slack sets `user_id` server-side, so a
+workspace member cannot forge another's, and an unresolved caller falls back to
+no framing rather than to a guess. What genuinely changes is **authorisation** —
+behind IAP that is an IAM binding on named principals; with Slack it is workspace
+and channel membership, administered in Slack rather than in the stack. Content
+exposure stays bounded either way, since retrieval reads only the shared vault
+that any Soilytix employee can already clone.
+
+Slack is also the only route that answers asynchronously. Slack wants HTTP 200
+within three seconds and an `opus-5` answer at `xhigh` effort is nowhere near
+that, so the route acks immediately and a background task posts to the payload's
+`response_url` when it finishes. **That requires CPU allocated outside a request
+on Cloud Run** — with the default throttling the background task stalls the
+moment the ack returns, and the asker never hears back. The delayed answer is
+ephemeral: it was shaped for one person using commentary about them, so it goes
+back to that person rather than the channel.
 
 Set `ASK_MAURICE_IAP_AUDIENCE` to IAP's audience string for this exact service.
 For Cloud Run that is
@@ -153,6 +179,11 @@ broken answers — `Agent.build` will not construct a client without a key, sinc
 the SDK would otherwise defer the failure to the first question and surface it as
 a 500 that reads like a model problem.
 
+If the Slack edge is on, the service also needs **CPU allocated outside a
+request**, for the reason in the access-edge section above. That is a Cloud Run
+setting, not an image one, and it changes the billing model from per-request to
+instance-based.
+
 ## What this is not, yet
 
 - **No literature/kb-mcp integration.** `runtime/literature.py` is a declared
@@ -167,5 +198,7 @@ a 500 that reads like a model problem.
   once that call is made on purpose.
 - **No Terraform here.** Hosting lives in the terraform repo, alongside
   `stacks/dev/kb-mcp`, following `docs/runbooks/host-internal-app.md`.
-- **Slack ingress is not built.** `runtime/identity.py` resolves a Slack user ID
-  to a person, but nothing listens on a Slack event API yet.
+- **Slack is slash-command only.** `/slack/command` is built and verified; there
+  is no Events API route, so app mentions and DMs do not reach the agent. Adding
+  one means handling Slack's retry/dedupe semantics, which slash commands do not
+  have.
