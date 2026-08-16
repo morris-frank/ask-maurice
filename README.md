@@ -57,6 +57,33 @@ agent. It is a sensitive asset. (This is a deliberate divergence from the
 its collection is baked into the image. Document it as an exception in the
 Terraform stack the same way `kb-mcp` documents its no-IAP exception.)
 
+## Retrieval
+
+Two corpora, and keeping them apart is the point.
+
+**The vault** is Maurice's own writing, so the agent speaks for it in the first
+person. It is retrieved before every call, by default with the local BM25 scan
+over `corpus/`. Set `ASK_MAURICE_VAULT_STORE` and `ASK_MAURICE_VAULT_RETRIEVAL=hybrid`
+and the same notes are also indexed in mixedbread and the two rankings are fused:
+BM25 is what finds `in-toto` in the twenty-two notes that name it, embeddings are
+what finds the note that answers the question without ever using the asker's word.
+Provenance survives the round trip because the indexer writes the repo path and
+the indexed commit into each file's metadata, so a mixedbread hit rebuilds the
+same `path@commit` citation a local excerpt carries.
+
+**The literature** is the research collection in mixedbread — papers the team has
+actually read and kept, largely out of Norman's Zotero library. It is third-party
+evidence, so it is a *tool* the model reaches for when an answer turns on an
+external finding, not something folded into every request. A paper gets
+attributed; a vault note gets asserted. `/ask` returns them in separate fields
+for the same reason.
+
+Set `MXBAI_API_KEY` and neither store, and none of this exists: no tool, no
+semantic index, lexical retrieval only. Set a store without the key and the
+config refuses to load — a retrieval path that is configured and dead is worse
+than one that is absent, because the agent cannot tell "no result" from "not
+connected".
+
 ## Commands
 
 | command | plane | does |
@@ -64,6 +91,7 @@ Terraform stack the same way `kb-mcp` documents its no-IAP exception.)
 | `ask-maurice build-persona` | build | compile the bundle from the private vault → `persona/bundle.json` (gitignored) |
 | `ask-maurice publish-persona` | build | push that bundle to GCP Secret Manager as a new version |
 | `ask-maurice corpus-sync` | runtime | clone/pull `Soilytix/vault` into `corpus/` |
+| `ask-maurice vault-index` | runtime | push that checkout into the mixedbread vault store (opt-in; asks first) |
 | `ask-maurice ask "…" --as julia@soilytix.com` | runtime | one question from the terminal, framed for that person |
 | `ask-maurice serve` | runtime | HTTP service (Entra-verified callers) |
 
@@ -74,6 +102,9 @@ mise run setup          # toolchain, deps, hooks, then `check`
 ask-maurice build-persona
 ask-maurice corpus-sync
 ask-maurice ask "why do we normalise by sequencing depth before the benchmark?" --as julia@soilytix.com
+
+ask-maurice vault-index --dry-run    # what would be sent to mixedbread
+ask-maurice vault-index              # send it, after confirming
 ```
 
 `build-persona` needs the private vault on disk (`ASK_MAURICE_PRIVATE_VAULT`).
@@ -82,9 +113,18 @@ in production from Secret Manager.
 
 ## What this is not, yet
 
-- **No literature/kb-mcp integration.** `runtime/literature.py` is a declared
-  stub. Science questions are answered from the shared vault only; the agent is
-  instructed to say when a claim needs a source it does not have.
+- **The vault store is not turned on.** The code path, the indexer and the
+  fusion are here and tested, but pushing the shared vault to a third-party
+  index is a data decision, not a deployment detail. `vault-index` asks before
+  it uploads and nothing runs it automatically. Until someone makes that call
+  deliberately, `ASK_MAURICE_VAULT_RETRIEVAL` stays `local`.
+- **kb-mcp is still not wired.** The literature path now goes to mixedbread
+  instead, which covers the papers but not the rest of what kb-mcp serves. The
+  agent is still instructed to say when a claim needs a source it does not have.
+- **Nothing keeps the vault store fresh.** `vault-index` is idempotent and skips
+  unchanged notes by content hash, so it is cheap to re-run after
+  `corpus-sync` — but scheduling that pair is a hosting concern and lives in the
+  terraform repo, not here.
 - **No podcast or video generation.** The artifact router *classifies* and
   proposes; only the document loop produces anything. NotebookLM is not wired.
 - **`transcripts/` is excluded from retrieval by default.** 66 transcript files

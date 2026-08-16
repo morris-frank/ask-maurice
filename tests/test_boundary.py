@@ -16,6 +16,8 @@ from ask_maurice.config import BuildConfig, RuntimeConfig
 
 RUNTIME_DIR = Path(__file__).resolve().parents[1] / "src" / "ask_maurice" / "runtime"
 PRIVATE_VAULT_ENV = "ASK_MAURICE_PRIVATE_VAULT"
+# The only module allowed to send anything to a third-party store.
+UPLOADER = "retrieval.py"
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -49,3 +51,33 @@ def test_runtime_never_names_the_private_vault_variable(module: Path):
 def test_runtime_config_has_no_field_pointing_at_private_content():
     assert "private_vault" in {f.name for f in fields(BuildConfig)}
     assert "private_vault" not in {f.name for f in fields(RuntimeConfig)}
+
+
+def test_the_module_that_uploads_cannot_see_the_persona_bundle():
+    """Indexing sends content to mixedbread. The bundle must not be reachable there.
+
+    Not a style rule: it is the difference between "the indexer does not upload
+    the bundle today" and "the indexer cannot be made to upload the bundle
+    without an import that fails this test first".
+    """
+    offenders = {
+        name
+        for name in _imported_modules(RUNTIME_DIR / UPLOADER)
+        if name.startswith("ask_maurice.persona") or name.endswith(".bundle")
+    }
+    assert not offenders, f"{UPLOADER} imports {sorted(offenders)}; it must not reach the bundle"
+
+
+@pytest.mark.parametrize(
+    "module",
+    [p for p in sorted(RUNTIME_DIR.glob("*.py")) if p.name != UPLOADER],
+    ids=lambda p: p.name,
+)
+def test_nothing_but_the_indexer_sends_content_to_a_store(module: Path):
+    code = "\n".join(
+        line.split("#", 1)[0] for line in module.read_text(encoding="utf-8").split("\n")
+    )
+    assert "files.create" not in code, (
+        f"{module.name} uploads to a third-party store. Keep every write path in {UPLOADER}, "
+        "where what may be sent is bounded by Corpus.documents()."
+    )

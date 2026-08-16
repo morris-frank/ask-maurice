@@ -24,7 +24,8 @@ from pydantic import BaseModel, Field
 
 from ask_maurice.config import EntraConfig, RuntimeConfig
 from ask_maurice.runtime import bundle as bundle_mod
-from ask_maurice.runtime import redaction
+from ask_maurice.runtime import literature as literature_mod
+from ask_maurice.runtime import redaction, retrieval
 from ask_maurice.runtime.agent import Agent, AgentError
 from ask_maurice.runtime.corpus import Corpus
 from ask_maurice.runtime.identity import Caller, from_claims, from_handle
@@ -41,6 +42,9 @@ class AskRequest(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     sources: list[str]
+    # Papers, kept in their own field for the same reason the agent keeps them
+    # in their own list: a vault path and a citation are different warrants.
+    references: list[str] = []
     artifact: str
     artifact_available: bool
 
@@ -66,7 +70,9 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     persona = bundle_mod.load(config)
     redaction.install(redaction.Redactor(persona))
     corpus = Corpus(root=config.corpus_path, include_transcripts=config.include_transcripts)
-    agent = Agent.build(persona, corpus)
+    literature = literature_mod.from_config(config.mixedbread)
+    log.info("%s", literature_mod.status(literature))
+    agent = Agent.build(persona, retrieval.for_config(config.mixedbread, corpus), literature)
 
     app = FastAPI(title="ask-maurice", docs_url=None, redoc_url=None)
 
@@ -113,6 +119,7 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
         return AskResponse(
             answer=answer.text,
             sources=answer.sources,
+            references=answer.references,
             artifact=answer.suggestion.kind.value,
             artifact_available=answer.suggestion.available,
         )
