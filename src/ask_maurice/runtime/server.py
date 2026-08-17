@@ -27,6 +27,7 @@ even an accidental log of prompt content is scrubbed on the way out.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -79,15 +80,48 @@ def resolve_caller(config: RuntimeConfig) -> Caller:
     raise HTTPException(401, "no authenticated HTTP edge is configured; use the Slack command")
 
 
-def slack_answer_text(answer: Answer) -> str:
-    """Format an answer for Slack. Sources inline; the artifact hint if there is one."""
-    parts = [answer.text]
+def slack_answer_text(answer: Answer, question: str = "") -> str:
+    """Format an answer for Slack. Sources inline; the artifact hint if there is one.
+
+    `question` is echoed when given, and it is not decoration. The ack is
+    ephemeral, so Slack never posts the invocation publicly; a delayed in-channel
+    answer would otherwise land in the channel with nothing to say what was
+    asked. Slack's own quote style, so it reads as context rather than as part of
+    the answer.
+    """
+    parts = []
+    if question:
+        parts.append(f"> {question}")
+    parts.append(answer.text)
     if answer.sources:
         parts.append("_sources: " + ", ".join(answer.sources) + "_")
     if answer.suggestion.kind.value != "none":
         availability = "" if answer.suggestion.available else " (not wired up yet)"
         parts.append(f"_artifact candidate: {answer.suggestion.kind.value}{availability}_")
     return "\n\n".join(parts)
+
+
+def slack_reply(produce: Callable[[], Answer], question: str, handle: str) -> tuple[str, str]:
+    """`(text, response_type)` for a slash command. Never raises.
+
+    The response_type split is the policy, and it is deliberate rather than an
+    inconsistency: an answer goes `in_channel` because the team reading each
+    other's answers is the reason this is public at all, while
+    ":warning: rate limited by the Anthropic API" is noise for everyone except
+    the person left waiting.
+
+    Nothing may escape here. The HTTP ack went out seconds ago, so an exception
+    would reach a dead request and the asker would get silence — which is
+    indistinguishable from a broken integration.
+    """
+    try:
+        return slack_answer_text(produce(), question=question), "in_channel"
+    except (AgentError, CorpusError) as exc:
+        # Both are documented as carrying no prompt or bundle content.
+        return f":warning: {exc}", "ephemeral"
+    except Exception:
+        log.exception("slack answer failed for %s", handle)
+        return ":warning: Something broke on my side. The error is in the logs.", "ephemeral"
 
 
 def create_app(config: RuntimeConfig | None = None) -> FastAPI:
@@ -112,23 +146,21 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
         """Answer, then post to the pre-signed `response_url`. Runs after the ack.
 
         Nothing here may raise into the caller's face — the HTTP response went out
-        long ago. Every failure becomes a message in the thread instead, because a
-        slash command that silently produces nothing is indistinguishable from a
-        broken integration.
+        long ago. Every failure becomes a message instead, because a slash command
+        that silently produces nothing is indistinguishable from a broken
+        integration.
+
+        Answers go `in_channel` and failures stay `ephemeral` — see `slack_reply`,
+        which owns that policy and swallows everything.
         """
         assert config.slack is not None  # noqa: S101 - the route checked; this is for ty
         who = from_slack_user(command.user_id, config.slack.bot_token, persona)
         log.info("slack question from %s (resolved=%s)", who.handle, who.known)
+        text, response_type = slack_reply(
+            lambda: agent.answer(command.text, who), command.text, who.handle
+        )
         try:
-            text = slack_answer_text(agent.answer(command.text, who))
-        except (AgentError, CorpusError) as exc:
-            # Both are documented as carrying no prompt or bundle content.
-            text = f":warning: {exc}"
-        except Exception:
-            log.exception("slack answer failed for %s", who.handle)
-            text = ":warning: Something broke on my side. The error is in the logs."
-        try:
-            WebhookClient(command.response_url).send(text=text, response_type="ephemeral")
+            WebhookClient(command.response_url).send(text=text, response_type=response_type)
         except Exception:
             # The answer is already lost; at least do not take the worker with it.
             log.exception("could not deliver slack answer to %s", who.handle)
@@ -144,10 +176,13 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
         Run service needs CPU allocated outside a request — with the default
         throttling the background task stalls the moment the ack returns.
 
-        The delayed answer is ephemeral: it was shaped for one person using
-        commentary about them, so it goes back to that person rather than the
-        channel. Flip `response_type` if the team decides shared answers are worth
-        more than that.
+        Ephemeral ack, public answer. The holding reply is for the asker alone —
+        it would be pure clutter in the channel — while the answer itself goes
+        `in_channel`, because the team seeing each other's answers is the point.
+
+        One consequence of that pairing: an ephemeral first response means Slack
+        never echoes the invocation publicly, so the delayed answer quotes the
+        question itself or it lands in the channel with no context.
         """
         if config.slack is None:
             raise HTTPException(404, "slack edge is not configured")
