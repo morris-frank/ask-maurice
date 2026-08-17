@@ -116,7 +116,10 @@ src/ask_maurice/
     server.py           FastAPI app. /slack/command is the only authenticated route:
                         its own verifier, its own identity join, and the only route
                         that answers async (Slack's 3s ack; needs
-                        CPU-always-allocated on Cloud Run). /ask has no verifier —
+                        CPU-always-allocated on Cloud Run). slack_reply() owns the
+                        disclosure policy — answers in_channel, failures ephemeral —
+                        and a public answer quotes the question because an ephemeral
+                        ack means Slack never echoed it. /ask has no verifier —
                         resolve_caller() answers anonymously when no edge exists at
                         all and 401s otherwise. The Entra and IAP edges were removed
                         (see README § Why there is only one edge); re-adding a bearer

@@ -245,8 +245,12 @@ Then, in Slack, from an account whose email is in the bundle:
 /maurice why do we normalise by sequencing depth before the benchmark?
 ```
 
-You should see the ack within a second and the real answer, ephemeral, shortly
-after. Two failure modes worth telling apart:
+You should see an ephemeral ack within a second, then the real answer **posted
+into the channel** shortly after, quoting the question. Do this in a channel you
+do not mind writing to — the answer is public to everyone in it, by design; see
+README § Ephemeral ack, public answer for what that does and does not expose.
+
+Two failure modes worth telling apart:
 
 - **Ack but no answer** → CPU throttling, or the background task raised. Check the
   Cloud Run logs for `slack answer failed`.

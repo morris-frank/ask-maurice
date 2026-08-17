@@ -182,9 +182,36 @@ within three seconds and an `opus-5` answer at `xhigh` effort is nowhere near
 that, so the route acks immediately and a background task posts to the payload's
 `response_url` when it finishes. **That requires CPU allocated outside a request
 on Cloud Run** — with the default throttling the background task stalls the
-moment the ack returns, and the asker never hears back. The delayed answer is
-ephemeral: it was shaped for one person using commentary about them, so it goes
-back to that person rather than the channel.
+moment the ack returns, and the asker never hears back.
+
+### Ephemeral ack, public answer
+
+The holding reply is ephemeral — a "thinking…" in everyone's channel is pure
+clutter — and the answer itself goes `in_channel`, because the team reading each
+other's answers is most of the value. Failures stay ephemeral: ":warning: rate
+limited by the Anthropic API" is noise for everyone except the person waiting.
+`runtime/server.py:slack_reply` owns that split.
+
+One consequence of the pairing, and the reason a public answer quotes the
+question: an ephemeral *first* response means Slack never echoes the invocation
+into the channel, so an unquoted answer would land with nothing saying what was
+asked.
+
+What going public does and does not expose is worth being precise about, because
+the framing draws on `.kbignore`'d material:
+
+- **Vault excerpts are not a new disclosure.** Retrieval reads only the shared
+  vault, which every Soilytix employee can already clone, and citations are
+  `path@commit` into it.
+- **Persona-bundle content was never in the answer to begin with.** `redaction.py`
+  shingle-checks every answer against the bundle and scrubs a hit before it is
+  sent, and the prompt carries a refusal instruction on top. That guard is
+  channel-independent; it did not become load-bearing because of this change.
+- **What is new is the framing itself.** Everyone in the channel now sees that an
+  answer to one person is pitched differently than to another. Nothing quotes the
+  commentary behind that, but the shaping is legible, and per-person register is
+  now a thing colleagues can compare. That is a disclosure surface the persona
+  bundle was not built for, and it is the part worth having decided on purpose.
 
 ## Building the container
 
