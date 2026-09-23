@@ -21,7 +21,7 @@ What genuinely widens is *authorisation*. A bearer edge would gate on a named
 principal in a tenant. Here it is whoever can invoke the slash command —
 workspace and channel membership, administered in Slack rather than in the
 stack. The content exposure is bounded (retrieval reads only the shared vault,
-which any Soilytix employee can already clone), but the reach is broader, and
+which anyone on the team can already clone), but the reach is broader, and
 that is a product decision rather than an implementation detail.
 
 Verification follows Slack's documented scheme: HMAC-SHA256 over

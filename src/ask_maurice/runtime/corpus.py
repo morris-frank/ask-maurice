@@ -1,7 +1,7 @@
 """The retrieval corpus: a clone of the SHARED vault, and nothing else.
 
-`ASK_MAURICE_CORPUS_REMOTE` points at `Soilytix/vault` — the same content any
-Soilytix employee can already clone. This module is the only thing the agent
+`ASK_MAURICE_CORPUS_REMOTE` points at the shared team vault — the same content
+anyone on the team can already clone. This module is the only thing the agent
 reads to answer a question, which is what makes "the agent can only answer from
 the shared vault" a property of the code rather than a promise in a prompt.
 

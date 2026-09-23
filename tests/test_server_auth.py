@@ -24,7 +24,7 @@ SLACK = SlackConfig(signing_secret=SLACK_SIGNING_SECRET, bot_token=SLACK_BOT_TOK
 
 _BASE = RuntimeConfig(
     corpus_path=Path("/nonexistent"),
-    corpus_remote="git@github.com:Soilytix/vault.git",
+    corpus_remote="git@github.com:your-org/vault.git",
     corpus_ref="main",
     include_transcripts=False,
     bundle_source="file",

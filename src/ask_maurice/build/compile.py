@@ -7,7 +7,7 @@ Three inputs, all under `.kbignore`'d paths and therefore build-plane-only:
   <optional style notes>           -> extra voice material, opt-in via env
 
 The join that makes asker-awareness work happens here, not at runtime: each key
-in the advisor dict ("Julia Jehn (Head of Comp Bio)") is matched to a person
+in the advisor dict ("Alex Doe (Head of Data)") is matched to a person
 note, and that note's `aliases` — which already carry corporate email addresses
 — become the runtime lookup table. No new mapping table, and the runtime never
 opens a person file.
@@ -32,7 +32,7 @@ from ask_maurice.persona import SCHEMA_VERSION, Participant, PersonaBundle
 SUBJECT_NOTE = "people/Maurice Frank.md"
 DICT_GLOB = "people/*team prompt dict.json"
 
-# "Julia Jehn (Head of Comp Bio)" -> "Julia Jehn"
+# "Alex Doe (Head of Data)" -> "Alex Doe"
 _PARENTHETICAL = re.compile(r"\s*\([^)]*\)\s*$")
 
 _FIELD_MAP = {

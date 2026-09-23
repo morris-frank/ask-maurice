@@ -1,13 +1,13 @@
 # ask-maurice — working agreement
 
-A hosted agent that answers Soilytix team questions in Maurice's voice, from the
+A hosted agent that answers team questions in Maurice's voice, from the
 shared vault, framed for whoever asked. See `README.md` for the shape; this file
 is the rules.
 
 ## Sensitivity boundary — read first
 
 This repo straddles a boundary that already exists in the vault: `origin`
-(`morris-frank/vault`, private, everything) vs `team` (`Soilytix/vault`, the
+(`morris-frank/vault`, private, everything) vs `team` (the shared team vault, the
 graduated subset). `.kbignore` in the vault names what never crosses, and
 `.bin/kb` is the only tool that moves content across it.
 
@@ -25,7 +25,7 @@ Four rules follow, and none of them are negotiable:
 3. **If content looks like it is crossing the boundary, stop and ask.** Do not
    copy, summarise or redact private content into a tracked path to make it
    fit. That is the vault's own `AGENTS.md` rule and it applies here verbatim.
-4. **Shared-inside-Soilytix is not the same as uploadable.** `vault-index` sends
+4. **Shared-inside-the-team is not the same as uploadable.** `vault-index` sends
    the team-vault checkout to mixedbread, a third party. That content is already
    readable by everyone on the team, which is what makes it *possible*; it is
    not what makes it *decided*. The command asks before it uploads, nothing runs

@@ -14,7 +14,7 @@ does not need — provided the commit travels some other way, which is what the
 `COMMIT` file beside the documents is for.
 
 Nothing here touches the private vault or the persona bundle. The corpus is the
-shared vault: the same content any Soilytix employee can already clone.
+shared vault: the same content anyone on the team can already clone.
 """
 
 from __future__ import annotations

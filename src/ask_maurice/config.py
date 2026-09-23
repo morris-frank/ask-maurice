@@ -207,9 +207,7 @@ class RuntimeConfig:
         secret = _require("ASK_MAURICE_BUNDLE_SECRET") if source == "secret" else ""
         return cls(
             corpus_path=Path(_optional("ASK_MAURICE_CORPUS", "./corpus")).expanduser(),
-            corpus_remote=_optional(
-                "ASK_MAURICE_CORPUS_REMOTE", "git@github.com:Soilytix/vault.git"
-            ),
+            corpus_remote=_optional("ASK_MAURICE_CORPUS_REMOTE", ""),
             corpus_ref=_optional("ASK_MAURICE_CORPUS_REF", "main"),
             include_transcripts=_flag("ASK_MAURICE_INCLUDE_TRANSCRIPTS"),
             bundle_source=source,

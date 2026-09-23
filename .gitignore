@@ -7,13 +7,13 @@
 # The build plane reads private (.kbignore'd) vault paths - people/, me/ - and
 # compiles them into a bundle containing candid per-person commentary. It is a
 # SENSITIVE ASSET: it must never be committed to any repo, least of all one the
-# Soilytix org can read. It travels exactly one way: build plane -> GCP Secret
+# team can read. It travels exactly one way: build plane -> GCP Secret
 # Manager -> runtime memory. See AGENTS.md § Sensitivity boundary.
 /persona/
 persona-bundle*.json
 
 # --- the retrieval corpus ------------------------------------------------
-# Local clone of the SHARED vault (Soilytix/vault @ main). Checked out at
+# Local clone of the SHARED vault (the team vault @ main). Checked out at
 # runtime, never vendored into this repo.
 /corpus/
 

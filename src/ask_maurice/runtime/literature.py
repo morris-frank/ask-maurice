@@ -1,12 +1,12 @@
 """Science-literature lookup over the mixedbread papers store.
 
-The corpus is the research collection assembled from Norman's Zotero library and
+The corpus is the research collection assembled from the team's Zotero library and
 uploaded to mixedbread. It is *third-party evidence*, which is what makes it a
 separate path from the vault rather than more rows in the same index: a vault
 excerpt is Maurice's own decision and he can assert it in the first person, and
 a paper is somebody else's finding that has to be attributed and can disagree
 with him. Collapsing the two would let the agent launder a claim from a paper
-into a Soilytix position, which is the exact move the science rules forbid.
+into a team position, which is the exact move the science rules forbid.
 
 The v1 stub warned that a half-wired literature path is worse than none, because
 the agent cannot tell "no result" from "not connected". That distinction is now

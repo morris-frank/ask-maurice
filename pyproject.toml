@@ -1,7 +1,7 @@
 [project]
 name = "ask-maurice"
 version = "0.1.0"
-description = "Hosted doppelgänger agent: answers Soilytix team questions in Maurice's voice, from the shared vault only, framed for whoever asked."
+description = "Hosted doppelgänger agent: answers team questions in Maurice's voice, from the shared vault only, framed for whoever asked."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

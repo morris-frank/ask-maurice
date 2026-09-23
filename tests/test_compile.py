@@ -16,7 +16,7 @@ from ask_maurice.persona import PersonaBundle
 
 
 def test_bare_name_strips_the_role_parenthetical():
-    assert bare_name("Julia Jehn (Head of Comp Bio)") == "Julia Jehn"
+    assert bare_name("Alex Doe (Head of Data)") == "Alex Doe"
     assert bare_name("Bruno (CEO)") == "Bruno"
     assert bare_name("Someone") == "Someone"
 

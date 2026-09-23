@@ -88,6 +88,8 @@ def corpus_sync() -> None:
 
     try:
         config = RuntimeConfig.from_env()
+        if not config.corpus_remote:
+            raise ConfigError("set ASK_MAURICE_CORPUS_REMOTE to the shared vault's git remote")
         head = sync(config.corpus_path, config.corpus_remote, config.corpus_ref)
     except (ConfigError, CorpusError) as exc:
         _fail(str(exc))
@@ -108,7 +110,7 @@ def vault_index(
     """RUNTIME PLANE: index the shared-vault checkout into the mixedbread store.
 
     Reads `corpus/` and nothing else, so what leaves the machine is the same
-    content any Soilytix employee can already clone — but it does leave the
+    content anyone on the team can already clone — but it does leave the
     machine, which is why this asks first and is never part of `corpus-sync`.
     Re-run it after every sync; unchanged files are skipped by content hash.
     """

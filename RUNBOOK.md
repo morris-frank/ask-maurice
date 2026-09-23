@@ -40,8 +40,7 @@ See README § Why there is only one edge. Two consequences for you as operator:
   them — they are read by nothing, and leaving them makes the console look like
   auth is configured when it is not.
 
-Steps 6–8 belong in the terraform repo long-term (alongside `stacks/dev/kb-mcp`,
-per `docs/runbooks/host-internal-app.md`). What follows is the manual equivalent
+Steps 6–8 belong in infrastructure-as-code long-term. What follows is the manual equivalent
 for the first deploy, and it is what the stack should end up expressing.
 
 ---
@@ -52,7 +51,7 @@ for the first deploy, and it is what the stack should end up expressing.
 |---|---|
 | GCP project id **and project number** | `gcloud projects describe PROJECT_ID` — the bundle secret's resource name uses the number, not the id |
 | Anthropic API key | console.anthropic.com |
-| Read access to `Soilytix/vault` | your own GitHub SSH key; the clone is a plain `git clone` |
+| Read access to the team vault repo | your own GitHub SSH key; the clone is a plain `git clone` |
 | Private vault on disk | `morris-frank/vault`, cloned locally |
 | mixedbread API key *(optional)* | platform.mixedbread.com — omit it and the whole integration is simply off |
 | mixedbread papers store name *(optional)* | the research collection; create it in the mixedbread dashboard first, this code does not create stores |
@@ -106,7 +105,7 @@ gcloud secrets create ask-maurice-persona \
 # Build plane: Maurice's own account may add versions.
 gcloud secrets add-iam-policy-binding ask-maurice-persona \
   --project="$PROJECT_ID" \
-  --member="user:maurice@soilytix.com" \
+  --member="user:you@example.com" \
   --role=roles/secretmanager.secretVersionAdder
 
 # Runtime: the service account may read, and only this one secret.
@@ -117,9 +116,8 @@ gcloud secrets add-iam-policy-binding ask-maurice-persona \
   --role=roles/secretmanager.secretAccessor
 ```
 
-That accessor binding is a documented divergence from the `kb-mcp` stack, whose
-service account has no Secret Manager access at all. Note it in the stack README
-the way kb-mcp notes its no-IAP exception.
+That accessor binding is the one Secret Manager permission the runtime has; note
+it wherever the hosting stack documents its IAM exceptions.
 
 Put the resulting name in `.env.local`:
 
@@ -145,10 +143,10 @@ layer. It goes to Secret Manager and nowhere else.
 ## 4. Corpus, smoke test, and the image
 
 ```bash
-mise exec -- uv run ask-maurice corpus-sync             # Soilytix/vault -> ./corpus
+mise exec -- uv run ask-maurice corpus-sync             # team vault -> ./corpus
 mise exec -- uv run ask-maurice ask \
   "why do we normalise by sequencing depth before the benchmark?" \
-  --as julia@soilytix.com
+  --as alex@example.com
 ```
 
 An answer with `path@commit` sources means both planes work locally. Only then
@@ -275,7 +273,7 @@ gcloud secrets add-iam-policy-binding ask-maurice-mxbai --project="$PROJECT_ID" 
 gcloud run services update ask-maurice \
   --project="$PROJECT_ID" --region="$REGION" \
   --update-secrets="MXBAI_API_KEY=ask-maurice-mxbai:latest" \
-  --update-env-vars="ASK_MAURICE_LITERATURE_STORE=soilytix-papers"
+  --update-env-vars="ASK_MAURICE_LITERATURE_STORE=<papers-store>"
 ```
 
 The store must already exist in mixedbread; this code searches stores, it does
@@ -292,7 +290,7 @@ failure this section exists to prevent.
 
 - **`vault-index` — sending the shared vault to mixedbread.** The indexer, the
   fusion and the provenance round trip are built and tested. Team-vault content
-  being readable by everyone at Soilytix is what makes uploading it *possible*;
+  being readable by everyone on the team is what makes uploading it *possible*;
   it is not what makes it *decided*. When someone makes that call on purpose:
 
   ```bash
@@ -325,7 +323,7 @@ gcloud run deploy ask-maurice --project="$PROJECT_ID" --region="$REGION" --image
 ```
 
 Nothing automates that yet — scheduling it is a hosting concern and belongs in
-the terraform repo. Until it exists, every citation the service emits is
+the hosting stack. Until it exists, every citation the service emits is
 `path@commit` for the commit that was baked, which is at least honest about how
 stale it is.
 

@@ -3,7 +3,7 @@ useDefault = true
 
 [allowlist]
 description = """
-corpus/ is a checkout of a different repository (the shared Soilytix vault),
+corpus/ is a checkout of a different repository (the shared team vault),
 pulled at runtime and gitignored here. It carries its own .gitleaks.toml and is
 scanned in its own repo; scanning it again from this one only produces findings
 nobody in this repo can act on. Everything this repo actually authors — including
